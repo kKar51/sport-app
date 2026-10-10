@@ -38,7 +38,7 @@ function plural(n,a,b,c){ var m10=n%10,m100=n%100; if(m10===1&&m100!==11) return
 /* ---------- local store + GitHub sync ---------- */
 var LS_KEY='sport-journal.v1';
 var DEFAULT_CFG={owner:'kKar51',repo:'sport',branch:'main',token:''};
-var DATA_RE=/^(program\.json|workouts\/\d{4}-\d{2}-\d{2}\.json|body\/\d{4}-\d{2}\.json)$/;
+var DATA_RE=/^(program\.json|workouts\/\d{4}-\d{2}-\d{2}\.json|body\/\d{4}-\d{2}\.json|food\/\d{4}-\d{2}\.json)$/;
 var Store={cfg:Object.assign({},DEFAULT_CFG),files:{},pending:{},lastSync:0,lastPull:0,state:'idle',err:'',q:Promise.resolve(),timer:null,persistTimer:null,localErr:''};
 
 function persist(){
@@ -88,6 +88,7 @@ function msgFor(p){
   if(p==='program.json') return 'Программа';
   var m=p.match(/^workouts\/(.+)\.json$/); if(m) return 'Тренировка '+m[1];
   m=p.match(/^body\/(.+)\.json$/); if(m) return 'Вес и талия '+m[1];
+  m=p.match(/^food\/(.+)\.json$/); if(m) return 'Питание '+m[1];
   return 'Обновление';
 }
 
@@ -177,16 +178,17 @@ async function pull(){
 }
 
 /* ---------- app state ---------- */
-var S={program:null,workouts:{},body:{},tab:'today',date:todayStr(),exSel:null};
+var S={program:null,workouts:{},body:{},food:{},tab:'today',date:todayStr(),exSel:null};
 var TYPES=[['A','Верх A'],['L','Ноги'],['B','Верх B'],['run','Бег'],['rest','Отдых']];
 
 function rebuild(){
-  S.program=null; S.workouts={}; S.body={};
+  S.program=null; S.workouts={}; S.body={}; S.food={};
   Object.keys(Store.files).forEach(function(p){
     var d=Store.files[p].data;
     if(p==='program.json') S.program=d;
     else if(p.indexOf('workouts/')===0) S.workouts[p.slice(9,-5)]=d;
     else if(p.indexOf('body/')===0) S.body[p.slice(5,-5)]=d;
+    else if(p.indexOf('food/')===0) S.food[p.slice(5,-5)]=d;
   });
 }
 function ensureFile(path,init){ if(!Store.files[path]) Store.files[path]={sha:null,data:init}; return Store.files[path].data; }
@@ -261,6 +263,16 @@ function bodySet(d,f,v){
   m[f]=m[f]||{}; if(v==null) delete m[f][d]; else m[f][d]=v;
 }
 function bodySeries(f){ var out=[]; Object.keys(S.body).forEach(function(k){ var o=S.body[k][f]||{}; Object.keys(o).forEach(function(d){ if(typeof o[d]==='number') out.push([d,o[d]]); }); }); return out.sort(function(a,b){ return a[0]<b[0]?-1:a[0]>b[0]?1:0; }); }
+function foodDay(d,create){
+  var key=d.slice(0,7),m=S.food[key];
+  if(!m&&create) m=S.food[key]=ensureFile('food/'+key+'.json',{days:{}});
+  if(!m) return null;
+  m.days=m.days||{};
+  if(!m.days[d]&&create) m.days[d]={meals:{},sweets:null,supp:{}};
+  var day=m.days[d]; if(day){ day.meals=day.meals||{}; day.supp=day.supp||{}; }
+  return day||null;
+}
+function touchFood(d){ touchPath('food/'+d.slice(0,7)+'.json'); }
 function lastBodyBefore(f,d){ var s=bodySeries(f).filter(function(p){ return p[0]<d; }); return s.length?s[s.length-1][1]:null; }
 function avgBetween(series,from,to){ var v=series.filter(function(p){ return p[0]>=from&&p[0]<=to; }).map(function(p){ return p[1]; }); return v.length?v.reduce(function(a,b){ return a+b; },0)/v.length:null; }
 
@@ -280,13 +292,17 @@ function renderHeader(){
 function paintTabs(){ Array.prototype.forEach.call(tabsEl.querySelectorAll('button'),function(b){ b.setAttribute('aria-selected',String(b.dataset.tab===S.tab)); }); }
 
 /* ---------- render: today ---------- */
-function renderToday(){
-  var p=P(),d=S.date,w=weekOf(d),ph=phaseOf(w),type=typeOf(d),wo=S.workouts[d],t=todayStr();
+function datebar(d){
+  var p=P(),w=weekOf(d),t=todayStr();
   var rel=d===t?'Сегодня':d===addDays(t,-1)?'Вчера':d===addDays(t,1)?'Завтра':'';
   var weekLbl=(w>=1&&w<=p.weeks)?'неделя '+w:'';
-  var h='<div class="datebar"><button class="icon-btn" type="button" data-act="prev" aria-label="Предыдущий день">‹</button>'+
+  return '<div class="datebar"><button class="icon-btn" type="button" data-act="prev" aria-label="Предыдущий день">‹</button>'+
     '<div class="d"><b>'+esc(fmtDay(d))+'</b><span>'+esc([rel,weekLbl].filter(Boolean).join(' · ')||' ')+'</span></div>'+
     '<button class="icon-btn" type="button" data-act="next" aria-label="Следующий день">›</button></div>';
+}
+function renderToday(){
+  var d=S.date,w=weekOf(d),ph=phaseOf(w),type=typeOf(d),wo=S.workouts[d];
+  var h=datebar(d);
   var sunday=isoDow(d)===7;
   h+='<div class="panel quick">'+
     '<div class="field"><label for="in-weight">Вес утром, кг</label><input class="big" id="in-weight" data-body="weights" inputmode="decimal" autocomplete="off" value="'+esc(fmtN(bodyGet(d,'weights')))+'" placeholder="'+esc(fmtN(lastBodyBefore('weights',d)))+'"></div>'+
@@ -349,6 +365,74 @@ function sessionBlock(type,d,w,wo){
   });
   return h+'</ol>';
 }
+
+/* ---------- render: food ---------- */
+function NUT(){ var p=P(); return p&&p.nutrition; }
+function mealOption(meal,id){ for(var i=0;i<meal.options.length;i++) if(meal.options[i].id===id) return meal.options[i]; return null; }
+function foodTotals(day){
+  var n=NUT(),res={kcal:0,p:0,onPlan:0,marked:0,unknown:0,total:n.meals.length};
+  if(!day) return res;
+  n.meals.forEach(function(meal){
+    var m=day.meals[meal.id]; if(!m||!m.opt) return;
+    res.marked++;
+    if(m.opt==='skip') return;
+    if(m.opt==='other'){ if(m.k!=null) res.kcal+=m.k; else res.unknown++; if(m.p!=null) res.p+=m.p; return; }
+    var o=mealOption(meal,m.opt); if(o){ res.kcal+=o.kcal; res.p+=o.p; res.onPlan++; }
+  });
+  if(day.sweets==='plan') res.kcal+=n.sweets.plan||150;
+  else if(day.sweets==='over') res.kcal+=n.sweets.over||450;
+  return res;
+}
+function bar(val,goal,label,unit){
+  var pct=Math.max(0,Math.min(100,Math.round(val/goal*100)));
+  return '<div class="meter"><div class="meter-top"><span>'+esc(label)+'</span><b>~'+fmtN(Math.round(val))+'</b><span class="muted"> / '+fmtN(goal)+' '+esc(unit)+'</span></div><div class="meter-track"><i class="'+(val>goal*1.1?'over':'')+'" data-w="'+pct+'"></i></div></div>';
+}
+function renderFood(){
+  var n=NUT(),d=S.date;
+  var h=datebar(d);
+  if(!n){ return h+'<div class="panel"><p class="muted small">План питания ещё не загружен. Он появится после синхронизации.</p></div>'; }
+  var day=foodDay(d,false),tot=foodTotals(day);
+  h+='<div class="panel nut-sum">'+bar(tot.kcal,n.targets.kcal,'Калории','ккал')+bar(tot.p,n.targets.protein,'Белок','г')+
+    '<p class="small muted">По плану '+tot.onPlan+' из '+tot.total+(tot.unknown?' · ккал «другого» не указаны: '+tot.unknown:'')+'. '+esc(n.goalLine||'')+'</p></div>';
+  h+='<ol class="meals">';
+  n.meals.forEach(function(meal){
+    var m=(day&&day.meals[meal.id])||{};
+    h+='<li class="meal"><div class="ses-head"><h3>'+esc(meal.title)+'</h3><span>'+esc(meal.time||'')+'</span></div><div class="opts">';
+    meal.options.forEach(function(o){
+      h+='<button class="opt" type="button" data-act="meal" data-meal="'+meal.id+'" data-opt="'+o.id+'" aria-pressed="'+(m.opt===o.id)+'"><span>'+esc(o.text)+'</span><small>~'+o.kcal+' ккал · '+o.p+' г белка</small></button>';
+    });
+    h+='<div class="row"><button class="chip" type="button" data-act="meal" data-meal="'+meal.id+'" data-opt="other" aria-pressed="'+(m.opt==='other')+'">Другое</button>'+
+       '<button class="chip" type="button" data-act="meal" data-meal="'+meal.id+'" data-opt="skip" aria-pressed="'+(m.opt==='skip')+'">Пропустил</button></div>';
+    if(m.opt==='other'){
+      h+='<div class="other"><div class="field"><label for="fo-t-'+meal.id+'">Что съел</label><input class="txt" id="fo-t-'+meal.id+'" data-food="text" data-meal="'+meal.id+'" autocomplete="off" value="'+esc(m.text||'')+'" placeholder="например, пицца, 3 куска"></div>'+
+         '<div class="two"><div class="field"><label for="fo-k-'+meal.id+'">Ккал, примерно</label><input class="txt" id="fo-k-'+meal.id+'" data-food="k" data-meal="'+meal.id+'" inputmode="numeric" autocomplete="off" value="'+esc(m.k==null?'':m.k)+'"></div>'+
+         '<div class="field"><label for="fo-p-'+meal.id+'">Белок, г</label><input class="txt" id="fo-p-'+meal.id+'" data-food="p" data-meal="'+meal.id+'" inputmode="numeric" autocomplete="off" value="'+esc(m.p==null?'':m.p)+'"></div></div></div>';
+    }
+    h+='</li>';
+  });
+  h+='</ol>';
+  var sw=day&&day.sweets;
+  h+='<div class="panel"><div class="ses-head"><h3>Сладкое</h3><span>'+esc(n.sweets.limit||'')+'</span></div><div class="row mt8">'+
+    [['none','Не было'],['plan','По плану'],['over','Больше плана']].map(function(x){ return '<button class="chip" type="button" data-act="sweets" data-val="'+x[0]+'" aria-pressed="'+(sw===x[0])+'">'+x[1]+'</button>'; }).join('')+
+    '</div>'+(n.sweets.hint?'<p class="small muted mt8">'+esc(n.sweets.hint)+'</p>':'')+'</div>';
+  h+='<div class="panel"><div class="ses-head"><h3>Добавки</h3><span>отметь, что принял</span></div><ul class="supps">';
+  n.supplements.forEach(function(s){
+    var on=!!(day&&day.supp[s.id]);
+    h+='<li><button class="check" type="button" data-act="supp" data-id="'+s.id+'" aria-pressed="'+on+'"><span class="box" aria-hidden="true"></span><span class="s-main"><b>'+esc(s.name)+'</b> · '+esc(s.dose)+(s.optional?' <em>по желанию</em>':'')+'<span class="s-when">'+esc(s.when)+'</span></span></button>'+
+      (s.note?'<details><summary>Подробнее</summary><p class="small muted">'+esc(s.note)+'</p></details>':'')+'</li>';
+  });
+  h+='</ul></div>';
+  // last 7 days
+  h+='<p class="sec">Неделя</p><div class="panel"><div class="week7">';
+  for(var i=6;i>=0;i--){
+    var dd=addDays(d,-i),dy=foodDay(dd,false),tt=foodTotals(dy);
+    var cls=!dy||!tt.marked?'none':tt.onPlan>=tt.total?'full':tt.onPlan>=tt.total-1?'most':'low';
+    h+='<div class="w7 '+cls+'"><span>'+esc(fmtShortI.format(parseYmd(dd)).replace('.',''))+'</span><b>'+(dy&&tt.marked?tt.onPlan+'/'+tt.total:'—')+'</b><small>'+(dy&&dy.sweets==='over'?'сладкое':' ')+'</small></div>';
+  }
+  h+='</div></div>';
+  return h;
+}
+function paintMeters(){ Array.prototype.forEach.call(view.querySelectorAll('.meter-track i[data-w]'),function(el){ el.style.width=el.getAttribute('data-w')+'%'; }); }
 
 /* ---------- render: body ---------- */
 function chartSVG(points,avg){
@@ -472,6 +556,17 @@ function renderProgram(){
   if(p.run) h+='<p class="sec">Бег</p><div class="panel"><p class="small">'+esc(p.run.note||'')+'</p></div>';
   if(p.progression&&p.progression.length) h+='<p class="sec">Как прибавлять вес</p><div class="panel"><ol class="rules">'+p.progression.map(function(r){ return '<li>'+esc(r)+'</li>'; }).join('')+'</ol></div>';
   if(p.rules&&p.rules.length) h+='<p class="sec">Правила</p><div class="panel"><ol class="rules">'+p.rules.map(function(r){ return '<li>'+esc(r)+'</li>'; }).join('')+'</ol></div>';
+  var n=p.nutrition;
+  if(n){
+    h+='<p class="sec">Питание</p><div class="panel"><ul class="list">'+
+      '<li><span>Калории</span><span>~'+n.targets.kcal+' ккал</span></li>'+
+      '<li><span>Белок</span><span>'+n.targets.protein+' г</span></li>'+
+      '<li><span>Жиры</span><span>'+esc(n.targets.fat)+'</span></li>'+
+      '<li><span>Углеводы</span><span>'+esc(n.targets.carbs)+'</span></li>'+
+      '<li><span>Вода</span><span>'+esc(n.targets.water)+'</span></li></ul></div>';
+    if(n.rules&&n.rules.length) h+='<div class="panel"><ol class="rules">'+n.rules.map(function(r){ return '<li>'+esc(r)+'</li>'; }).join('')+'</ol></div>';
+    if(n.shopping&&n.shopping.length) h+='<p class="sec">Покупки на неделю</p><div class="panel"><ul class="rules">'+n.shopping.map(function(r){ return '<li>'+esc(r)+'</li>'; }).join('')+'</ul></div>';
+  }
   return h;
 }
 
@@ -501,7 +596,7 @@ function renderSettings(){
     '</ol><p class="small muted mt8">Вставляй токен в приложение, открытое с иконки на экране «Домой». У иконки своё хранилище, отдельное от Safari. Токен хранится только в этом телефоне.</p></div>';
   return h;
 }
-function exportJSON(){ return JSON.stringify({exportedAt:new Date().toISOString(),program:S.program,workouts:S.workouts,body:S.body},null,2); }
+function exportJSON(){ return JSON.stringify({exportedAt:new Date().toISOString(),program:S.program,workouts:S.workouts,body:S.body,food:S.food},null,2); }
 function copyData(){
   var txt=exportJSON(),msg=document.getElementById('copy-msg'),ta=document.getElementById('copy-area');
   var fallback=function(){ if(msg) msg.textContent='Скопировать автоматически не получилось: выдели текст ниже и скопируй.'; if(ta){ ta.hidden=false; ta.value=txt; ta.focus(); ta.select(); } };
@@ -523,10 +618,12 @@ function render(){
   var out='';
   if(!hasToken()&&pendingCount()) out+='<div class="banner">Записи пока только в этом телефоне. Подключи GitHub в настройках, чтобы они не потерялись.</div>';
   if(S.tab==='today') out+=renderToday();
+  else if(S.tab==='food') out+=renderFood();
   else if(S.tab==='body') out+=renderBody();
   else if(S.tab==='history') out+=renderHistory();
   else out+=renderProgram();
   view.innerHTML=out;
+  paintMeters();
 }
 function soft(){
   var a=document.activeElement;
@@ -553,6 +650,15 @@ view.addEventListener('click',function(e){
     touchPath('workouts/'+S.date+'.json'); render();
     var ex=findEx(id),el=document.getElementById((ex&&ex.noWeight?'r-':'w-')+id+'-'+n); if(el) el.focus();
   }
+  else if(act==='meal'){
+    var fd=foodDay(S.date,true),mid=b.dataset.meal,opt=b.dataset.opt,cur=fd.meals[mid]||{};
+    if(cur.opt===opt) delete fd.meals[mid];
+    else fd.meals[mid]= opt==='other' ? {opt:'other',text:cur.text||'',k:cur.k==null?null:cur.k,p:cur.p==null?null:cur.p} : {opt:opt};
+    touchFood(S.date); render();
+    if(opt==='other'&&fd.meals[mid]){ var inp=document.getElementById('fo-t-'+mid); if(inp) inp.focus(); }
+  }
+  else if(act==='sweets'){ var fs=foodDay(S.date,true); fs.sweets= fs.sweets===b.dataset.val?null:b.dataset.val; touchFood(S.date); render(); }
+  else if(act==='supp'){ var fp=foodDay(S.date,true),sid=b.dataset.id; if(fp.supp[sid]) delete fp.supp[sid]; else fp.supp[sid]=true; touchFood(S.date); render(); }
   else if(act==='open-settings'){ S.tab='settings'; render(); }
   else if(act==='save-cfg'){
     var v=function(id){ var el=document.getElementById(id); return el?el.value.trim():''; };
@@ -581,6 +687,14 @@ view.addEventListener('input',function(e){
     var w3=getW(S.date,true); w3.note=t.value; touchPath('workouts/'+S.date+'.json');
   } else if(t.dataset.body){
     bodySet(S.date,t.dataset.body,num(t.value)); touchPath('body/'+S.date.slice(0,7)+'.json');
+  } else if(t.dataset.food){
+    var fd=foodDay(S.date,true),m=fd.meals[t.dataset.meal]||(fd.meals[t.dataset.meal]={opt:'other'});
+    if(t.dataset.food==='text') m.text=t.value; else m[t.dataset.food]=int(t.value);
+    touchFood(S.date);
+    var tot=foodTotals(fd),bars=view.querySelectorAll('.nut-sum .meter');
+    if(bars.length===2){ bars[0].outerHTML=bar(tot.kcal,NUT().targets.kcal,'Калории','ккал'); }
+    bars=view.querySelectorAll('.nut-sum .meter'); if(bars.length===2){ bars[1].outerHTML=bar(tot.p,NUT().targets.protein,'Белок','г'); }
+    paintMeters();
   }
 });
 view.addEventListener('change',function(e){ if(e.target.id==='ex-select'){ S.exSel=e.target.value; render(); } });

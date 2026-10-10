@@ -1,5 +1,5 @@
 // Offline shell for the journal. GitHub API calls are never cached.
-var CACHE='sport-journal-v1';
+var CACHE='sport-journal-v2';
 var SHELL=['./','index.html','app.css','app.js','manifest.webmanifest','icons/icon-180.png','icons/icon-192.png','icons/icon-512.png'];
 
 self.addEventListener('install',function(e){
