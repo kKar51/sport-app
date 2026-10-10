@@ -113,7 +113,11 @@ textarea{width:100%;min-width:0;padding:10px;border:1px solid var(--line);border
 .btn-ghost{border:1px dashed var(--line);background:none;color:var(--accent);padding:6px 12px;border-radius:8px;font-size:14px;font-weight:500}
 .alt{font-size:12.5px;color:var(--muted)}
 
-.tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+@media (min-width:600px){ .tiles{grid-template-columns:repeat(4,minmax(0,1fr))} }
+.cue{font-size:12.5px;line-height:1.4;color:var(--muted);border-left:2px solid var(--line);padding-left:8px}
+.after{font-size:13.5px;color:var(--muted)}
+.after b{color:var(--ink)}
 .tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;min-width:0}
 .tile span{display:block;font-size:11.5px;letter-spacing:.04em;color:var(--muted)}
 .tile b{display:block;font-family:var(--display);font-weight:700;font-size:26px;line-height:1.15;font-variant-numeric:tabular-nums}
@@ -197,7 +201,6 @@ details p{margin-top:4px}
 .tabs button[aria-selected="true"]{color:var(--accent);box-shadow:inset 0 2.5px 0 var(--accent)}
 
 @media (max-width:380px){
-  .tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
   .run{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}

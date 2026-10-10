@@ -27,7 +27,8 @@ function fmtShort(s){ return fmtShortI.format(parseYmd(s)); }
 function fmtLong(s){ return fmtLongI.format(parseYmd(s)); }
 function fmtWhen(ms){ var d=new Date(ms), hm=pad(d.getHours())+':'+pad(d.getMinutes()); return ymd(d)===todayStr()?hm:fmtShortI.format(d)+' '+hm; }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
-function num(v){ if(v==null) return null; var t=String(v).trim().replace(',','.'); if(t==='') return null; var n=Number(t); return isFinite(n)?n:null; }
+function num(v){ if(v==null) return null; var t=String(v).replace(/\s/g,'').replace(',','.'); if(t==='') return null; var n=Number(t); return isFinite(n)?n:null; }
+function thousands(v){ return v==null?'—':Math.round(v).toLocaleString('ru-RU'); }
 function int(v){ var n=num(v); return n==null?null:Math.round(n); }
 function fmtN(n){ if(n==null||n==='') return ''; return String(Math.round(n*100)/100).replace('.',','); }
 function signed(n,unit){ if(n==null) return '—'; var r=Math.round(n*10)/10; return (r>0?'+':r<0?'−':'')+fmtN(Math.abs(r))+(unit?' '+unit:''); }
@@ -178,7 +179,7 @@ async function pull(){
 }
 
 /* ---------- app state ---------- */
-var S={program:null,workouts:{},body:{},food:{},tab:'today',date:todayStr(),exSel:null};
+var S={program:null,workouts:{},body:{},food:{},tab:'today',date:todayStr(),exSel:null,showMeasure:false};
 var TYPES=[['A','Верх A'],['L','Ноги'],['B','Верх B'],['run','Бег'],['rest','Отдых']];
 
 function rebuild(){
@@ -303,11 +304,7 @@ function datebar(d){
 function renderToday(){
   var d=S.date,w=weekOf(d),ph=phaseOf(w),type=typeOf(d),wo=S.workouts[d];
   var h=datebar(d);
-  var sunday=isoDow(d)===7;
-  h+='<div class="panel quick">'+
-    '<div class="field"><label for="in-weight">Вес утром, кг</label><input class="big" id="in-weight" data-body="weights" inputmode="decimal" autocomplete="off" value="'+esc(fmtN(bodyGet(d,'weights')))+'" placeholder="'+esc(fmtN(lastBodyBefore('weights',d)))+'"></div>'+
-    '<div class="field"><label for="in-waist">Талия, см'+(sunday?' · замер':'')+'</label><input class="big" id="in-waist" data-body="waist" inputmode="decimal" autocomplete="off" value="'+esc(fmtN(bodyGet(d,'waist')))+'" placeholder="'+esc(sunday?fmtN(lastBodyBefore('waist',d)):'по вс')+'"></div>'+
-    '</div>';
+  h+=quickPanel(d);
   h+='<div class="chips" role="group" aria-label="Что сегодня">'+TYPES.map(function(x){
     return '<button class="chip" type="button" data-act="type" data-type="'+x[0]+'" aria-pressed="'+(x[0]===type)+'">'+esc(typeTitle(x[0]))+(x[0]===plannedType(d)?'<small> · план</small>':'')+'</button>';
   }).join('')+'</div>';
@@ -316,6 +313,22 @@ function renderToday(){
   else if(type==='run') h+=runBlock(d,w,wo);
   else h+=sessionBlock(type,d,w,wo);
   h+='<div class="field"><label for="in-note">Заметка</label><textarea id="in-note" data-note="1" rows="2" placeholder="Самочувствие, сон, что мешало">'+esc(wo&&wo.note||'')+'</textarea></div>';
+  return h;
+}
+function quickPanel(d){
+  var sunday=isoDow(d)===7;
+  var showM=sunday||S.showMeasure||bodyGet(d,'waist')!=null||bodyGet(d,'lower')!=null;
+  var f=function(id,field,label,ph,mode,isInt){
+    var v=bodyGet(d,field);
+    return '<div class="field"><label for="'+id+'">'+esc(label)+'</label><input class="big" id="'+id+'" data-body="'+field+'"'+(isInt?' data-int="1"':'')+' inputmode="'+(mode||'decimal')+'" autocomplete="off" value="'+esc(isInt?(v==null?'':String(Math.round(v))):fmtN(v))+'" placeholder="'+esc(ph)+'"></div>';
+  };
+  var h='<div class="panel quick">'+
+    f('in-weight','weights','Вес утром, кг',fmtN(lastBodyBefore('weights',d)))+
+    f('in-steps','steps','Шаги за день',P().stepsTarget||'8–10 тыс.','numeric',true);
+  if(showM) h+=f('in-waist','waist','Талия, см',fmtN(lastBodyBefore('waist',d)))+f('in-lower','lower','Низ живота, см',fmtN(lastBodyBefore('lower',d)));
+  h+='</div>';
+  if(showM) h+='<p class="small muted">Замер по воскресеньям, утром натощак, живот расслаблен. Талия — на уровне пупка, низ живота — на 5 см ниже пупка.</p>';
+  else h+='<div><button class="btn-ghost" type="button" data-act="show-measure">+ Замер талии и низа живота</button></div>';
   return h;
 }
 function restBlock(){
@@ -346,6 +359,7 @@ function sessionBlock(type,d,w,wo){
     h+='<li class="ex"><div class="ex-top"><span class="ex-n">'+(i+1)+'</span><div class="ex-name"><h3>'+esc(ex.name)+'</h3>'+
       '<p class="target">'+planned+' × '+esc(dash(ex.reps))+(ex.perSide?' на сторону':'')+' · отдых '+esc(ex.rest)+'</p>'+
       (ss?'<p class="tag">'+esc(ss)+'</p>':'')+'</div></div>';
+    if(ex.cue) h+='<p class="cue">'+esc(ex.cue)+'</p>';
     if(hn.last) h+='<p class="last">'+esc(hn.last)+'</p>';
     if(hn.advice) h+='<p class="hint '+hn.cls+'">'+esc(hn.advice)+'</p>';
     h+='<div class="sets">';
@@ -363,7 +377,9 @@ function sessionBlock(type,d,w,wo){
     h+='</div><div class="ex-foot"><button class="btn-ghost" type="button" data-act="addset" data-ex="'+ex.id+'" data-n="'+n+'">+ подход</button>'+
       (ex.alt?'<span class="alt">Замена: '+esc(ex.alt)+'</span>':'')+'</div></li>';
   });
-  return h+'</ol>';
+  h+='</ol>';
+  if(ses.after) h+='<div class="panel after"><b>После тренировки.</b> '+esc(ses.after)+'</div>';
+  return h;
 }
 
 /* ---------- render: food ---------- */
@@ -458,11 +474,17 @@ function renderBody(){
   var p=P(),t=todayStr(),ws=bodySeries('weights'),wa=bodySeries('waist');
   var a7=avgBetween(ws,addDays(t,-6),t),p7=avgBetween(ws,addDays(t,-13),addDays(t,-7));
   var delta=(a7!=null&&p7!=null)?a7-p7:null;
-  var waistNow=wa.length?wa[wa.length-1][1]:null,waist0=wa.length?wa[0][1]:null;
+  var lo=bodySeries('lower'),st=bodySeries('steps');
+  var last=function(s){ return s.length?s[s.length-1][1]:null; },first=function(s){ return s.length?s[0][1]:null; };
+  var waistNow=last(wa),lowNow=last(lo),s7=avgBetween(st,addDays(t,-6),t);
+  var since=[];
+  if(wa.length>1) since.push('талия '+signed(waistNow-first(wa),'см'));
+  if(lo.length>1) since.push('низ '+signed(lowNow-first(lo),'см'));
   var h='<div class="tiles">'+
-    '<div class="tile"><span>Средний за 7 дней</span><b>'+(a7!=null?fmtN(Math.round(a7*10)/10):'—')+'</b><span>кг</span></div>'+
+    '<div class="tile"><span>Средний вес за 7 дней</span><b>'+(a7!=null?fmtN(Math.round(a7*10)/10):'—')+'</b><span>кг</span></div>'+
     '<div class="tile"><span>К прошлой неделе</span><b class="'+(delta==null?'':delta<=0?'good':'bad')+'">'+signed(delta)+'</b><span>кг</span></div>'+
-    '<div class="tile"><span>Талия</span><b>'+(waistNow!=null?fmtN(waistNow):'—')+'</b><span>'+(waist0!=null&&wa.length>1?signed(waistNow-waist0,'см')+' от старта':'см')+'</span></div>'+
+    '<div class="tile"><span>Талия · низ живота</span><b>'+(waistNow!=null?fmtN(waistNow):'—')+' · '+(lowNow!=null?fmtN(lowNow):'—')+'</b><span>'+esc(since.length?since.join(', ')+' от старта':'см')+'</span></div>'+
+    '<div class="tile"><span>Шаги, среднее за 7 дней</span><b class="'+(s7==null?'':s7>=8000?'good':'bad')+'">'+thousands(s7)+'</b><span>цель '+esc(p.stepsTarget||'8–10 тыс.')+'</span></div>'+
     '</div>';
   var from=addDays(t,-55),pts=ws.filter(function(q){ return q[0]>=from; });
   h+='<div class="panel"><p class="sec flush">Вес, 8 недель</p>';
@@ -472,15 +494,22 @@ function renderBody(){
   } else h+='<p class="muted small">График появится после двух-трёх утренних взвешиваний. Вес вводится на вкладке «Сегодня».</p>';
   h+='</div>';
   var weeks={};
-  ws.forEach(function(q){ var m=monday(q[0]); (weeks[m]=weeks[m]||{w:[],waist:null}).w.push(q[1]); });
-  wa.forEach(function(q){ var m=monday(q[0]); (weeks[m]=weeks[m]||{w:[],waist:null}).waist=q[1]; });
+  var wk=function(d){ var m=monday(d); return weeks[m]=weeks[m]||{w:[],waist:null,lower:null,steps:[]}; };
+  ws.forEach(function(q){ wk(q[0]).w.push(q[1]); });
+  wa.forEach(function(q){ wk(q[0]).waist=q[1]; });
+  lo.forEach(function(q){ wk(q[0]).lower=q[1]; });
+  st.forEach(function(q){ wk(q[0]).steps.push(q[1]); });
   var keys=Object.keys(weeks).sort();
   if(keys.length){
-    var rows=[],prev=null;
-    keys.forEach(function(m){ var o=weeks[m]; var av=o.w.length?o.w.reduce(function(a,b){ return a+b; },0)/o.w.length:null; rows.push({m:m,av:av,n:o.w.length,d:(av!=null&&prev!=null)?av-prev:null,waist:o.waist}); if(av!=null) prev=av; });
-    h+='<p class="sec">По неделям</p><div class="panel tbl"><table><thead><tr><th>Неделя</th><th>Ср. вес</th><th>Δ</th><th>Талия</th></tr></thead><tbody>';
+    var rows=[],prev=null,mean=function(a){ return a.length?a.reduce(function(x,y){ return x+y; },0)/a.length:null; };
+    keys.forEach(function(m){ var o=weeks[m],av=mean(o.w); rows.push({m:m,av:av,n:o.w.length,d:(av!=null&&prev!=null)?av-prev:null,waist:o.waist,lower:o.lower,steps:mean(o.steps)}); if(av!=null) prev=av; });
+    h+='<p class="sec">По неделям</p><div class="panel tbl"><table><thead><tr><th>Неделя</th><th>Ср. вес</th><th>Δ</th><th>Талия</th><th>Шаги</th></tr></thead><tbody>';
     rows.reverse().forEach(function(r){
-      h+='<tr><td>'+esc(fmtShort(r.m))+' – '+esc(fmtShort(addDays(r.m,6)))+'<span class="sub">'+r.n+' '+plural(r.n,'взвешивание','взвешивания','взвешиваний')+'</span></td><td>'+(r.av!=null?fmtN(Math.round(r.av*10)/10):'—')+'</td><td class="'+(r.d==null?'':r.d<=0?'good-t':'bad-t')+'">'+signed(r.d)+'</td><td>'+(r.waist!=null?fmtN(r.waist):'—')+'</td></tr>';
+      h+='<tr><td>'+esc(fmtShort(r.m))+' – '+esc(fmtShort(addDays(r.m,6)))+'<span class="sub">'+r.n+' '+plural(r.n,'взвешивание','взвешивания','взвешиваний')+'</span></td>'+
+        '<td>'+(r.av!=null?fmtN(Math.round(r.av*10)/10):'—')+'</td>'+
+        '<td class="'+(r.d==null?'':r.d<=0?'good-t':'bad-t')+'">'+signed(r.d)+'</td>'+
+        '<td>'+(r.waist!=null?fmtN(r.waist):'—')+(r.lower!=null?'<span class="sub">низ '+fmtN(r.lower)+'</span>':'')+'</td>'+
+        '<td>'+(r.steps!=null?fmtN(Math.round(r.steps/100)/10)+'<span class="sub">тыс.</span>':'—')+'</td></tr>';
     });
     h+='</tbody></table></div>';
   }
@@ -552,6 +581,7 @@ function renderProgram(){
     h+='<p class="sec">'+esc(s.title)+(s.sub?' · '+esc(s.sub):'')+'</p><div class="panel tbl"><table><thead><tr><th>#</th><th>Упражнение</th><th>Подходы</th><th>Отдых</th></tr></thead><tbody>';
     s.items.forEach(function(ex,i){ var ss=supersetNote(s.items,i); h+='<tr><td>'+(i+1)+'</td><td>'+esc(ex.name)+'<span class="sub">'+esc([ss,ex.alt?'Замена: '+ex.alt:''].filter(Boolean).join(' · '))+'</span></td><td>'+ex.sets+' × '+esc(dash(ex.reps))+(ex.perSide?' на ст.':'')+'</td><td>'+esc(ex.rest)+'</td></tr>'; });
     h+='</tbody></table></div>';
+    if(s.after) h+='<p class="small muted">'+esc(s.after)+'</p>';
   });
   if(p.run) h+='<p class="sec">Бег</p><div class="panel"><p class="small">'+esc(p.run.note||'')+'</p></div>';
   if(p.progression&&p.progression.length) h+='<p class="sec">Как прибавлять вес</p><div class="panel"><ol class="rules">'+p.progression.map(function(r){ return '<li>'+esc(r)+'</li>'; }).join('')+'</ol></div>';
@@ -563,6 +593,8 @@ function renderProgram(){
       '<li><span>Белок</span><span>'+n.targets.protein+' г</span></li>'+
       '<li><span>Жиры</span><span>'+esc(n.targets.fat)+'</span></li>'+
       '<li><span>Углеводы</span><span>'+esc(n.targets.carbs)+'</span></li>'+
+      (n.targets.fiber?'<li><span>Клетчатка</span><span>'+esc(n.targets.fiber)+'</span></li>':'')+
+      (p.stepsTarget?'<li><span>Шаги</span><span>'+esc(p.stepsTarget)+' в день</span></li>':'')+
       '<li><span>Вода</span><span>'+esc(n.targets.water)+'</span></li></ul></div>';
     if(n.rules&&n.rules.length) h+='<div class="panel"><ol class="rules">'+n.rules.map(function(r){ return '<li>'+esc(r)+'</li>'; }).join('')+'</ol></div>';
     if(n.shopping&&n.shopping.length) h+='<p class="sec">Покупки на неделю</p><div class="panel"><ul class="rules">'+n.shopping.map(function(r){ return '<li>'+esc(r)+'</li>'; }).join('')+'</ul></div>';
@@ -640,7 +672,8 @@ gearEl.addEventListener('click',function(){ persist(); S.tab=S.tab==='settings'?
 view.addEventListener('click',function(e){
   var b=e.target.closest('[data-act]'); if(!b||b.disabled) return;
   var act=b.dataset.act;
-  if(act==='prev'||act==='next'){ persist(); S.date=addDays(S.date,act==='prev'?-1:1); render(); }
+  if(act==='prev'||act==='next'){ persist(); S.date=addDays(S.date,act==='prev'?-1:1); S.showMeasure=false; render(); }
+  else if(act==='show-measure'){ S.showMeasure=true; render(); var wi=document.getElementById('in-waist'); if(wi) wi.focus(); }
   else if(act==='type'){ var wo=getW(S.date,true); if(wo.type===b.dataset.type) return; wo.type=b.dataset.type; touchPath('workouts/'+S.date+'.json'); render(); }
   else if(act==='addset'){
     var id=b.dataset.ex,n=+b.dataset.n,w=getW(S.date,true);
@@ -686,7 +719,7 @@ view.addEventListener('input',function(e){
   } else if(t.dataset.note){
     var w3=getW(S.date,true); w3.note=t.value; touchPath('workouts/'+S.date+'.json');
   } else if(t.dataset.body){
-    bodySet(S.date,t.dataset.body,num(t.value)); touchPath('body/'+S.date.slice(0,7)+'.json');
+    bodySet(S.date,t.dataset.body,t.dataset.int?int(t.value):num(t.value)); touchPath('body/'+S.date.slice(0,7)+'.json');
   } else if(t.dataset.food){
     var fd=foodDay(S.date,true),m=fd.meals[t.dataset.meal]||(fd.meals[t.dataset.meal]={opt:'other'});
     if(t.dataset.food==='text') m.text=t.value; else m[t.dataset.food]=int(t.value);
