@@ -516,7 +516,7 @@ function renderBody(){
   if(p.milestones&&p.milestones.length){
     h+='<p class="sec">Ориентиры</p><div class="panel tbl"><table><thead><tr><th>Когда</th><th>Вес</th><th>Талия</th></tr></thead><tbody>';
     p.milestones.forEach(function(m){ h+='<tr><td>'+esc(m.when)+(m.note?'<span class="sub">'+esc(m.note)+'</span>':'')+'</td><td>'+esc(m.weight)+'</td><td>'+esc(m.waist)+'</td></tr>'; });
-    h+='</tbody></table></div><p class="muted small">Темп 0,5–0,7 кг в неделю. Смотри на среднее за неделю, а не на отдельные дни: утренний вес скачет на 0,5–1 кг из-за воды и соли.</p>';
+    h+='</tbody></table></div><p class="muted small">Темп '+esc(p.pace||'0,4–0,6 кг в неделю')+'. Смотри на среднее за неделю, а не на отдельные дни: утренний вес скачет на 0,5–1 кг из-за воды и соли.</p>';
   }
   return h;
 }
