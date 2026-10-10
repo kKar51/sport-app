@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://api.github.com; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#edf0f3" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e1217" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Журнал">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<title>Журнал зала</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans+Extra+Condensed:wght@500;600;700&family=Golos+Text:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="top-row">
+      <div class="grow">
+        <h1 class="cycle-title" id="cycle-title">Журнал зала</h1>
+        <p class="cycle-sub" id="cycle-sub"></p>
+      </div>
+      <div class="top-side">
+        <span class="status" id="status" role="status" aria-live="polite"></span>
+        <button class="gear" id="gear" type="button" aria-label="Настройки">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M12 2.8l1.6 2.3 2.7-.7.7 2.7 2.6 1-.9 2.6 1.6 2.3-2.3 1.6.3 2.8-2.8.3-1 2.6-2.6-1L12 21.2l-1.6-2.3-2.6 1-1-2.6-2.8-.3.3-2.8-2.3-1.6 1.6-2.3-.9-2.6 2.6-1 .7-2.7 2.7.7z"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="strip" id="strip" aria-hidden="true"></div>
+  </div>
+</header>
+
+<main class="wrap" id="view"><div class="empty"><b>Загружаю журнал</b>Секунду.</div></main>
+
+<nav class="tabs" aria-label="Разделы">
+  <div class="tabs-in" id="tabs" role="tablist">
+    <button type="button" role="tab" data-tab="today" aria-selected="true">Сегодня</button>
+    <button type="button" role="tab" data-tab="body" aria-selected="false">Тело</button>
+    <button type="button" role="tab" data-tab="history" aria-selected="false">История</button>
+    <button type="button" role="tab" data-tab="program" aria-selected="false">Программа</button>
+  </div>
+</nav>
+<noscript><p class="wrap">Для журнала нужен включённый JavaScript.</p></noscript>
+<script src="app.js"></script>
+</body>
+</html>
