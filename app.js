@@ -179,7 +179,7 @@ async function pull(){
 }
 
 /* ---------- app state ---------- */
-var S={program:null,workouts:{},body:{},food:{},tab:'today',date:todayStr(),exSel:null,showMeasure:false};
+var S={program:null,workouts:{},body:{},food:{},tab:'today',date:todayStr(),exSel:null,showMeasure:false,swapOpen:null};
 var TYPES=[['A','Верх A'],['L','Ноги'],['B','Верх B'],['run','Бег'],['rest','Отдых']];
 
 function rebuild(){
@@ -214,7 +214,30 @@ function plannedType(d){ var p=P(); return (p&&p.schedule&&p.schedule[String(iso
 function typeOf(d){ var w=S.workouts[d]; return (w&&w.type)||plannedType(d); }
 function typeTitle(t){ var p=P(); if(p&&p.sessions&&p.sessions[t]) return p.sessions[t].title; for(var i=0;i<TYPES.length;i++) if(TYPES[i][0]===t) return TYPES[i][1]; return t; }
 function allExercises(){ var p=P(),out=[]; if(!p) return out; ['A','L','B'].forEach(function(k){ var s=p.sessions[k]; if(s) s.items.forEach(function(ex){ out.push({ex:ex,ses:k}); }); }); return out; }
-function findEx(id){ var a=allExercises(); for(var i=0;i<a.length;i++) if(a[i].ex.id===id) return a[i].ex; return null; }
+// An alternative inherits sets, reps, rest and superset from its slot; its own fields win.
+function effEx(slot,choice){
+  if(!choice||choice===slot.id) return slot;
+  var a=(slot.alts||[]).filter(function(x){ return x.id===choice; })[0];
+  if(!a) return slot;
+  var e=Object.assign({},slot,{inc:0,incText:'',unit:undefined,noWeight:false,bw:false,cue:'',start:null,repsUnit:undefined},a);
+  e.slot=slot.id; e.slotName=slot.name; e.isAlt=true; e.alts=slot.alts;
+  return e;
+}
+function findEx(id){
+  var a=allExercises(),i,j;
+  for(i=0;i<a.length;i++) if(a[i].ex.id===id) return a[i].ex;
+  for(i=0;i<a.length;i++){ var al=a[i].ex.alts||[]; for(j=0;j<al.length;j++) if(al[j].id===id) return effEx(a[i].ex,id); }
+  return null;
+}
+// Which exercise fills a slot on a date: the day's own choice, else the last choice made before it.
+function slotChoice(slot,d){
+  var wo=S.workouts[d];
+  if(wo&&wo.swaps&&wo.swaps[slot.id]) return wo.swaps[slot.id];
+  var ds=sortedDates(true);
+  for(var i=0;i<ds.length;i++){ var dd=ds[i]; if(dd>=d) continue; var w=S.workouts[dd]; if(w&&w.swaps&&w.swaps[slot.id]) return w.swaps[slot.id]; }
+  return slot.id;
+}
+function repsWord(ex){ return ex.repsUnit==='с'?'секунд':'повторов'; }
 function filled(rows){ return (rows||[]).filter(function(r){ return r&&r.r!=null&&r.r>0; }); }
 function sortedDates(desc){ var k=Object.keys(S.workouts).sort(); return desc?k.reverse():k; }
 function lastSession(exId,before){
@@ -223,14 +246,14 @@ function lastSession(exId,before){
   return null;
 }
 function maxW(rows){ var m=null; rows.forEach(function(r){ if(r.w!=null&&(m==null||r.w>m)) m=r.w; }); return m; }
-function setTxt(ex,r){ if(ex.noWeight) return String(r.r); if(r.w==null||r.w===0) return r.r+(ex.bw?' повт.':''); return (ex.bw?'+':'')+fmtN(r.w)+'×'+r.r; }
+function setTxt(ex,r){ if(ex.noWeight) return r.r+(ex.repsUnit?' '+ex.repsUnit:''); if(r.w==null||r.w===0) return r.r+(ex.bw?' повт.':''); return (ex.bw?'+':'')+fmtN(r.w)+'×'+r.r; }
 function hintFor(ex,d,last){
   var w=weekOf(d),ph=phaseOf(w).key,hi=range(ex.reps)[1];
   var res={last:'',advice:'',cls:''};
   if(last) res.last='Прошлый раз, '+fmtShort(last.date)+': '+last.rows.map(function(r){ return setTxt(ex,r); }).join(' · ');
   if(ex.start&&(ph==='intro'||ph==='pre')){ var i=Math.max(0,Math.min(ex.start.length-1,(w<1?1:w)-1)); res.advice='План недели: '+ex.start[i]; return res; }
   if(ph==='deload'){ res.advice='Разгрузка: вес как обычно, подходов меньше'; return res; }
-  if(!last){ res.advice='Подбери вес: на '+hi+' повторах должно оставаться 2–3 в запасе'; return res; }
+  if(!last){ res.advice=ex.noWeight?'Делай так, чтобы на '+hi+' '+repsWord(ex)+' оставалось 2–3 в запасе':'Подбери вес: на '+hi+' повторах должно оставаться 2–3 в запасе'; return res; }
   var planned=plannedSets(ex,weekOf(last.date));
   var top=last.rows.length>=planned&&last.rows.slice(0,planned).every(function(r){ return r.r>=hi; });
   var lw=maxW(last.rows);
@@ -241,7 +264,7 @@ function hintFor(ex,d,last){
     else res.advice='Пора прибавить: '+ex.incText;
   } else {
     res.cls='hold';
-    res.advice=(lw&&!ex.noWeight)?'Держи '+fmtN(lw)+' '+(ex.unit||'кг')+', добирай до '+hi+' повторов в каждом подходе':'Добирай до '+hi+' повторов в каждом подходе';
+    res.advice=(lw&&!ex.noWeight)?'Держи '+fmtN(lw)+' '+(ex.unit||'кг')+', добирай до '+hi+' повторов в каждом подходе':'Добирай до '+hi+' '+repsWord(ex)+' в каждом подходе';
   }
   return res;
 }
@@ -322,12 +345,15 @@ function quickPanel(d){
     var v=bodyGet(d,field);
     return '<div class="field"><label for="'+id+'">'+esc(label)+'</label><input class="big" id="'+id+'" data-body="'+field+'"'+(isInt?' data-int="1"':'')+' inputmode="'+(mode||'decimal')+'" autocomplete="off" value="'+esc(isInt?(v==null?'':String(Math.round(v))):fmtN(v))+'" placeholder="'+esc(ph)+'"></div>';
   };
-  var h='<div class="panel quick">'+
-    f('in-weight','weights','Вес утром, кг',fmtN(lastBodyBefore('weights',d)))+
-    f('in-steps','steps','Шаги за день',P().stepsTarget||'8–10 тыс.','numeric',true);
-  if(showM) h+=f('in-waist','waist','Талия, см',fmtN(lastBodyBefore('waist',d)))+f('in-lower','lower','Низ живота, см',fmtN(lastBodyBefore('lower',d)));
+  var h='<div class="panel"><div class="quick3">'+
+    f('in-weight','weights','Вес, кг',fmtN(lastBodyBefore('weights',d)))+
+    f('in-sleep','sleep','Сон, ч','7–8')+
+    f('in-steps','steps','Шаги','8000+','numeric',true)+'</div>';
+  if(showM) h+='<div class="quick mt12">'+f('in-waist','waist','Талия, см',fmtN(lastBodyBefore('waist',d)))+f('in-lower','lower','Низ живота, см',fmtN(lastBodyBefore('lower',d)))+'</div>';
   h+='</div>';
-  if(showM) h+='<p class="small muted">Замер по воскресеньям, утром натощак, живот расслаблен. Талия — на уровне пупка, низ живота — на 5 см ниже пупка.</p>';
+  var sl=bodyGet(d,'sleep');
+  if(sl!=null&&sl<6&&typeOf(d)!=='rest'&&typeOf(d)!=='run') h+='<div class="banner">Сон меньше 6 часов. По правилам программы зал сегодня переносится, вместо него прогулка.</div>';
+  if(showM) h+='<p class="small muted">Замер раз в неделю, по воскресеньям: утром натощак, после выдоха, живот не втягивать, лента плотно, но не впивается. Талия — на уровне пупка, низ живота — на 5 см ниже. Ежедневные замеры скачут на 1–3 см и только путают.</p>';
   else h+='<div><button class="btn-ghost" type="button" data-act="show-measure">+ Замер талии и низа живота</button></div>';
   return h;
 }
@@ -349,15 +375,17 @@ function runBlock(d,w,wo){
 function sessionBlock(type,d,w,wo){
   var ses=P().sessions[type]; if(!ses) return '';
   var h='<div class="ses-head"><h2>'+esc(ses.title)+'</h2>'+(ses.sub?'<span>'+esc(ses.sub)+'</span>':'')+'</div><ol class="exlist">';
-  ses.items.forEach(function(ex,i){
-    var planned=plannedSets(ex,w);
+  ses.items.forEach(function(slot,i){
+    var ex=effEx(slot,slotChoice(slot,d));
+    var planned=plannedSets(slot,w);
     var rows=(wo&&wo.sets&&wo.sets[ex.id])||[];
     var n=Math.max(planned,rows.length);
     var last=lastSession(ex.id,d);
     var hn=hintFor(ex,d,last);
     var ss=supersetNote(ses.items,i);
     h+='<li class="ex"><div class="ex-top"><span class="ex-n">'+(i+1)+'</span><div class="ex-name"><h3>'+esc(ex.name)+'</h3>'+
-      '<p class="target">'+planned+' × '+esc(dash(ex.reps))+(ex.perSide?' на сторону':'')+' · отдых '+esc(ex.rest)+'</p>'+
+      '<p class="target">'+planned+' × '+esc(dash(ex.reps))+(ex.repsUnit?' '+esc(ex.repsUnit):'')+(ex.perSide?' на сторону':'')+' · отдых '+esc(ex.rest)+'</p>'+
+      (ex.isAlt?'<p class="tag swapped">Замена вместо «'+esc(slot.name)+'»</p>':'')+
       (ss?'<p class="tag">'+esc(ss)+'</p>':'')+'</div></div>';
     if(ex.cue) h+='<p class="cue">'+esc(ex.cue)+'</p>';
     if(hn.last) h+='<p class="last">'+esc(hn.last)+'</p>';
@@ -368,14 +396,23 @@ function sessionBlock(type,d,w,wo){
       var pr=last?(last.rows[k]||last.rows[last.rows.length-1]):null;
       h+='<div class="set'+(ex.noWeight?' nw':'')+'"><span class="set-n">'+(k+1)+'</span>';
       if(!ex.noWeight){
-        h+='<input class="cell" id="w-'+ex.id+'-'+k+'" data-ex="'+ex.id+'" data-i="'+k+'" data-f="w" inputmode="decimal" autocomplete="off" aria-label="'+esc(ex.name)+', подход '+(k+1)+', вес" value="'+esc(fmtN(r.w))+'" placeholder="'+esc(pr&&pr.w!=null?fmtN(pr.w):(ex.bw?'0':''))+'">'+
+        h+='<input class="cell" id="w-'+ex.id+'-'+k+'" data-ex="'+ex.id+'" data-slot="'+slot.id+'" data-i="'+k+'" data-f="w" inputmode="decimal" autocomplete="off" aria-label="'+esc(ex.name)+', подход '+(k+1)+', вес" value="'+esc(fmtN(r.w))+'" placeholder="'+esc(pr&&pr.w!=null?fmtN(pr.w):(ex.bw?'0':''))+'">'+
            '<span class="unit">'+esc(ex.unit||'кг')+' ×</span>';
       }
-      h+='<input class="cell" id="r-'+ex.id+'-'+k+'" data-ex="'+ex.id+'" data-i="'+k+'" data-f="r" inputmode="numeric" autocomplete="off" aria-label="'+esc(ex.name)+', подход '+(k+1)+', повторы" value="'+esc(r.r==null?'':r.r)+'" placeholder="'+esc(pr?pr.r:'')+'">'+
-         '<span class="unit">повт.</span></div>';
+      h+='<input class="cell" id="r-'+ex.id+'-'+k+'" data-ex="'+ex.id+'" data-slot="'+slot.id+'" data-i="'+k+'" data-f="r" inputmode="numeric" autocomplete="off" aria-label="'+esc(ex.name)+', подход '+(k+1)+', '+(ex.repsUnit==='с'?'секунды':'повторы')+'" value="'+esc(r.r==null?'':r.r)+'" placeholder="'+esc(pr?pr.r:'')+'">'+
+         '<span class="unit">'+esc(ex.repsUnit||'повт.')+'</span></div>';
     }
-    h+='</div><div class="ex-foot"><button class="btn-ghost" type="button" data-act="addset" data-ex="'+ex.id+'" data-n="'+n+'">+ подход</button>'+
-      (ex.alt?'<span class="alt">Замена: '+esc(ex.alt)+'</span>':'')+'</div></li>';
+    var open=S.swapOpen===slot.id;
+    h+='</div><div class="ex-foot"><button class="btn-ghost" type="button" data-act="addset" data-ex="'+ex.id+'" data-slot="'+slot.id+'" data-n="'+n+'">+ подход</button>'+
+      ((slot.alts&&slot.alts.length)?'<button class="btn-ghost" type="button" data-act="swap-open" data-slot="'+slot.id+'" aria-expanded="'+open+'">'+(open?'Закрыть':'Заменить')+'</button>':'')+'</div>';
+    if(open){
+      var choices=[slot].concat(slot.alts);
+      h+='<div class="opts swaps">'+choices.map(function(c){
+        var cur=c.id===ex.id;
+        return '<button class="opt" type="button" data-act="swap" data-slot="'+slot.id+'" data-choice="'+c.id+'" aria-pressed="'+cur+'"><span>'+esc(c.name)+'</span><small>'+(c.id===slot.id?'основное упражнение':'замена')+(cur?' · сейчас':'')+'</small></button>';
+      }).join('')+'<p class="small muted">Выбор запомнится: в следующий раз здесь будет это же упражнение. Веса и история у каждого упражнения свои.</p></div>';
+    }
+    h+='</li>';
   });
   h+='</ol>';
   if(ses.after) h+='<div class="panel after"><b>После тренировки.</b> '+esc(ses.after)+'</div>';
@@ -395,6 +432,7 @@ function foodTotals(day){
     if(m.opt==='other'){ if(m.k!=null) res.kcal+=m.k; else res.unknown++; if(m.p!=null) res.p+=m.p; return; }
     var o=mealOption(meal,m.opt); if(o){ res.kcal+=o.kcal; res.p+=o.p; res.onPlan++; }
   });
+  (day.extra||[]).forEach(function(x){ if(x.k!=null) res.kcal+=x.k; else res.unknown++; if(x.p!=null) res.p+=x.p; });
   if(day.sweets==='plan') res.kcal+=n.sweets.plan||150;
   else if(day.sweets==='over') res.kcal+=n.sweets.over||450;
   return res;
@@ -409,7 +447,7 @@ function renderFood(){
   if(!n){ return h+'<div class="panel"><p class="muted small">План питания ещё не загружен. Он появится после синхронизации.</p></div>'; }
   var day=foodDay(d,false),tot=foodTotals(day);
   h+='<div class="panel nut-sum">'+bar(tot.kcal,n.targets.kcal,'Калории','ккал')+bar(tot.p,n.targets.protein,'Белок','г')+
-    '<p class="small muted">По плану '+tot.onPlan+' из '+tot.total+(tot.unknown?' · ккал «другого» не указаны: '+tot.unknown:'')+'. '+esc(n.goalLine||'')+'</p></div>';
+    '<p class="small muted">По плану '+tot.onPlan+' из '+tot.total+(tot.unknown?' · без калорий: '+tot.unknown+' '+plural(tot.unknown,'запись','записи','записей')+', их посчитаем при разборе':'')+'. '+esc(n.goalLine||'')+'</p></div>';
   h+='<ol class="meals">';
   n.meals.forEach(function(meal){
     var m=(day&&day.meals[meal.id])||{};
@@ -421,12 +459,25 @@ function renderFood(){
        '<button class="chip" type="button" data-act="meal" data-meal="'+meal.id+'" data-opt="skip" aria-pressed="'+(m.opt==='skip')+'">Пропустил</button></div>';
     if(m.opt==='other'){
       h+='<div class="other"><div class="field"><label for="fo-t-'+meal.id+'">Что съел</label><input class="txt" id="fo-t-'+meal.id+'" data-food="text" data-meal="'+meal.id+'" autocomplete="off" value="'+esc(m.text||'')+'" placeholder="например, пицца, 3 куска"></div>'+
-         '<div class="two"><div class="field"><label for="fo-k-'+meal.id+'">Ккал, примерно</label><input class="txt" id="fo-k-'+meal.id+'" data-food="k" data-meal="'+meal.id+'" inputmode="numeric" autocomplete="off" value="'+esc(m.k==null?'':m.k)+'"></div>'+
+         '<div class="two"><div class="field"><label for="fo-k-'+meal.id+'">Ккал, если знаешь</label><input class="txt" id="fo-k-'+meal.id+'" data-food="k" data-meal="'+meal.id+'" inputmode="numeric" autocomplete="off" value="'+esc(m.k==null?'':m.k)+'"></div>'+
          '<div class="field"><label for="fo-p-'+meal.id+'">Белок, г</label><input class="txt" id="fo-p-'+meal.id+'" data-food="p" data-meal="'+meal.id+'" inputmode="numeric" autocomplete="off" value="'+esc(m.p==null?'':m.p)+'"></div></div></div>';
     }
     h+='</li>';
   });
   h+='</ol>';
+  var ex=(day&&day.extra)||[];
+  h+='<div class="panel"><div class="ses-head"><h3>Ещё что-то съел</h3><span>перекусы, напитки, всё вне плана</span></div>';
+  if(ex.length){
+    h+='<ul class="extra">'+ex.map(function(x,i){
+      var meta=[x.k!=null?'~'+x.k+' ккал':'',x.p!=null?x.p+' г белка':''].filter(Boolean).join(' · ');
+      return '<li><span class="x-text">'+esc(x.text)+(meta?'<small>'+esc(meta)+'</small>':'')+'</span><button class="x-del" type="button" data-act="extra-del" data-i="'+i+'" aria-label="Удалить: '+esc(x.text)+'">×</button></li>';
+    }).join('')+'</ul>';
+  }
+  h+='<div class="other mt8"><div class="field"><label for="ex-text">Что съел</label><input class="txt" id="ex-text" autocomplete="off" placeholder="например, капучино 300 мл и банан"></div>'+
+     '<div class="two"><div class="field"><label for="ex-k">Ккал, если знаешь</label><input class="txt" id="ex-k" inputmode="numeric" autocomplete="off"></div>'+
+     '<div class="field"><label for="ex-p">Белок, г</label><input class="txt" id="ex-p" inputmode="numeric" autocomplete="off"></div></div>'+
+     '<div class="row"><button class="btn" type="button" data-act="extra-add">Добавить</button></div></div>'+
+     '<p class="small muted mt8">Пиши своими словами и с граммами, если знаешь. Калории можно не указывать: при разборе питания их посчитают по описанию.</p></div>';
   var sw=day&&day.sweets;
   h+='<div class="panel"><div class="ses-head"><h3>Сладкое</h3><span>'+esc(n.sweets.limit||'')+'</span></div><div class="row mt8">'+
     [['none','Не было'],['plan','По плану'],['over','Больше плана']].map(function(x){ return '<button class="chip" type="button" data-act="sweets" data-val="'+x[0]+'" aria-pressed="'+(sw===x[0])+'">'+x[1]+'</button>'; }).join('')+
@@ -476,15 +527,16 @@ function renderBody(){
   var delta=(a7!=null&&p7!=null)?a7-p7:null;
   var lo=bodySeries('lower'),st=bodySeries('steps');
   var last=function(s){ return s.length?s[s.length-1][1]:null; },first=function(s){ return s.length?s[0][1]:null; };
-  var waistNow=last(wa),lowNow=last(lo),s7=avgBetween(st,addDays(t,-6),t);
+  var sl=bodySeries('sleep');
+  var waistNow=last(wa),lowNow=last(lo),s7=avgBetween(st,addDays(t,-6),t),sl7=avgBetween(sl,addDays(t,-6),t);
   var since=[];
   if(wa.length>1) since.push('талия '+signed(waistNow-first(wa),'см'));
   if(lo.length>1) since.push('низ '+signed(lowNow-first(lo),'см'));
   var h='<div class="tiles">'+
-    '<div class="tile"><span>Средний вес за 7 дней</span><b>'+(a7!=null?fmtN(Math.round(a7*10)/10):'—')+'</b><span>кг</span></div>'+
-    '<div class="tile"><span>К прошлой неделе</span><b class="'+(delta==null?'':delta<=0?'good':'bad')+'">'+signed(delta)+'</b><span>кг</span></div>'+
+    '<div class="tile"><span>Вес, среднее за 7 дней</span><b>'+(a7!=null?fmtN(Math.round(a7*10)/10):'—')+'</b><span class="'+(delta==null?'':delta<=0?'good':'bad')+'">'+(delta==null?'кг':signed(delta,'кг')+' к прошлой неделе')+'</span></div>'+
     '<div class="tile"><span>Талия · низ живота</span><b>'+(waistNow!=null?fmtN(waistNow):'—')+' · '+(lowNow!=null?fmtN(lowNow):'—')+'</b><span>'+esc(since.length?since.join(', ')+' от старта':'см')+'</span></div>'+
     '<div class="tile"><span>Шаги, среднее за 7 дней</span><b class="'+(s7==null?'':s7>=8000?'good':'bad')+'">'+thousands(s7)+'</b><span>цель '+esc(p.stepsTarget||'8–10 тыс.')+'</span></div>'+
+    '<div class="tile"><span>Сон, среднее за 7 дней</span><b class="'+(sl7==null?'':sl7>=7?'good':'bad')+'">'+(sl7!=null?fmtN(Math.round(sl7*10)/10):'—')+'</b><span>ч · цель '+esc(p.sleepTarget||'7–8 ч')+'</span></div>'+
     '</div>';
   var from=addDays(t,-55),pts=ws.filter(function(q){ return q[0]>=from; });
   h+='<div class="panel"><p class="sec flush">Вес, 8 недель</p>';
@@ -494,22 +546,23 @@ function renderBody(){
   } else h+='<p class="muted small">График появится после двух-трёх утренних взвешиваний. Вес вводится на вкладке «Сегодня».</p>';
   h+='</div>';
   var weeks={};
-  var wk=function(d){ var m=monday(d); return weeks[m]=weeks[m]||{w:[],waist:null,lower:null,steps:[]}; };
+  var wk=function(d){ var m=monday(d); return weeks[m]=weeks[m]||{w:[],waist:null,lower:null,steps:[],sleep:[]}; };
   ws.forEach(function(q){ wk(q[0]).w.push(q[1]); });
   wa.forEach(function(q){ wk(q[0]).waist=q[1]; });
   lo.forEach(function(q){ wk(q[0]).lower=q[1]; });
   st.forEach(function(q){ wk(q[0]).steps.push(q[1]); });
+  sl.forEach(function(q){ wk(q[0]).sleep.push(q[1]); });
   var keys=Object.keys(weeks).sort();
   if(keys.length){
     var rows=[],prev=null,mean=function(a){ return a.length?a.reduce(function(x,y){ return x+y; },0)/a.length:null; };
-    keys.forEach(function(m){ var o=weeks[m],av=mean(o.w); rows.push({m:m,av:av,n:o.w.length,d:(av!=null&&prev!=null)?av-prev:null,waist:o.waist,lower:o.lower,steps:mean(o.steps)}); if(av!=null) prev=av; });
-    h+='<p class="sec">По неделям</p><div class="panel tbl"><table><thead><tr><th>Неделя</th><th>Ср. вес</th><th>Δ</th><th>Талия</th><th>Шаги</th></tr></thead><tbody>';
+    keys.forEach(function(m){ var o=weeks[m],av=mean(o.w); rows.push({m:m,av:av,n:o.w.length,d:(av!=null&&prev!=null)?av-prev:null,waist:o.waist,lower:o.lower,steps:mean(o.steps),sleep:mean(o.sleep)}); if(av!=null) prev=av; });
+    h+='<p class="sec">По неделям</p><div class="panel tbl"><table><thead><tr><th>Неделя</th><th>Ср. вес</th><th>Δ</th><th>Талия</th><th>Шаги, сон</th></tr></thead><tbody>';
     rows.reverse().forEach(function(r){
       h+='<tr><td>'+esc(fmtShort(r.m))+' – '+esc(fmtShort(addDays(r.m,6)))+'<span class="sub">'+r.n+' '+plural(r.n,'взвешивание','взвешивания','взвешиваний')+'</span></td>'+
         '<td>'+(r.av!=null?fmtN(Math.round(r.av*10)/10):'—')+'</td>'+
         '<td class="'+(r.d==null?'':r.d<=0?'good-t':'bad-t')+'">'+signed(r.d)+'</td>'+
         '<td>'+(r.waist!=null?fmtN(r.waist):'—')+(r.lower!=null?'<span class="sub">низ '+fmtN(r.lower)+'</span>':'')+'</td>'+
-        '<td>'+(r.steps!=null?fmtN(Math.round(r.steps/100)/10)+'<span class="sub">тыс.</span>':'—')+'</td></tr>';
+        '<td>'+(r.steps!=null?fmtN(Math.round(r.steps/100)/10)+' тыс.':'—')+(r.sleep!=null?'<span class="sub">сон '+fmtN(Math.round(r.sleep*10)/10)+' ч</span>':'')+'</td></tr>';
     });
     h+='</tbody></table></div>';
   }
@@ -523,7 +576,7 @@ function renderBody(){
 
 /* ---------- render: history ---------- */
 function metric(ex,rows){
-  if(ex.noWeight||(ex.bw&&!maxW(rows))) return {v:rows.reduce(function(a,r){ return a+r.r; },0),lbl:'повторов'};
+  if(ex.noWeight||(ex.bw&&!maxW(rows))) return {v:rows.reduce(function(a,r){ return a+r.r; },0),lbl:repsWord(ex)+' за тренировку'};
   var best=0; rows.forEach(function(r){ if(r.w>0){ var e=r.w*(1+r.r/30); if(e>best) best=e; } });
   return {v:Math.round(best*10)/10,lbl:'кг, оценка максимума'};
 }
@@ -538,7 +591,12 @@ function renderHistory(){
   var p=P(),all=allExercises();
   if(!S.exSel||!findEx(S.exSel)) S.exSel=all.length?all[0].ex.id:null;
   var h='<div class="field"><label for="ex-select">Упражнение</label><select id="ex-select">';
-  ['A','L','B'].forEach(function(k){ var s=p.sessions[k]; if(!s) return; h+='<optgroup label="'+esc(s.title)+'">'+s.items.map(function(ex){ return '<option value="'+ex.id+'"'+(ex.id===S.exSel?' selected':'')+'>'+esc(ex.name)+'</option>'; }).join('')+'</optgroup>'; });
+  var hasData=function(id){ return Object.keys(S.workouts).some(function(d){ var w=S.workouts[d]; return filled(w.sets&&w.sets[id]).length>0; }); };
+  var shown={};
+  ['A','L','B'].forEach(function(k){ var s=p.sessions[k]; if(!s) return; h+='<optgroup label="'+esc(s.title)+'">'+s.items.map(function(ex){
+    var o='<option value="'+ex.id+'"'+(ex.id===S.exSel?' selected':'')+'>'+esc(ex.name)+'</option>'; shown[ex.id]=1;
+    (ex.alts||[]).forEach(function(a){ if(!shown[a.id]&&hasData(a.id)){ shown[a.id]=1; o+='<option value="'+a.id+'"'+(a.id===S.exSel?' selected':'')+'>   замена: '+esc(a.name)+'</option>'; } });
+    return o; }).join('')+'</optgroup>'; });
   h+='</select></div>';
   var ex=findEx(S.exSel);
   if(ex){
@@ -579,7 +637,7 @@ function renderProgram(){
   ['A','L','B'].forEach(function(k){
     var s=p.sessions[k]; if(!s) return;
     h+='<p class="sec">'+esc(s.title)+(s.sub?' · '+esc(s.sub):'')+'</p><div class="panel tbl"><table><thead><tr><th>#</th><th>Упражнение</th><th>Подходы</th><th>Отдых</th></tr></thead><tbody>';
-    s.items.forEach(function(ex,i){ var ss=supersetNote(s.items,i); h+='<tr><td>'+(i+1)+'</td><td>'+esc(ex.name)+'<span class="sub">'+esc([ss,ex.alt?'Замена: '+ex.alt:''].filter(Boolean).join(' · '))+'</span></td><td>'+ex.sets+' × '+esc(dash(ex.reps))+(ex.perSide?' на ст.':'')+'</td><td>'+esc(ex.rest)+'</td></tr>'; });
+    s.items.forEach(function(ex,i){ var ss=supersetNote(s.items,i); var alts=(ex.alts||[]).map(function(a){ return a.name; }).join(', '); h+='<tr><td>'+(i+1)+'</td><td>'+esc(ex.name)+'<span class="sub">'+esc([ss,alts?'Замены: '+alts:''].filter(Boolean).join(' · '))+'</span></td><td>'+ex.sets+' × '+esc(dash(ex.reps))+(ex.perSide?' на ст.':'')+'</td><td>'+esc(ex.rest)+'</td></tr>'; });
     h+='</tbody></table></div>';
     if(s.after) h+='<p class="small muted">'+esc(s.after)+'</p>';
   });
@@ -672,11 +730,29 @@ gearEl.addEventListener('click',function(){ persist(); S.tab=S.tab==='settings'?
 view.addEventListener('click',function(e){
   var b=e.target.closest('[data-act]'); if(!b||b.disabled) return;
   var act=b.dataset.act;
-  if(act==='prev'||act==='next'){ persist(); S.date=addDays(S.date,act==='prev'?-1:1); S.showMeasure=false; render(); }
+  if(act==='prev'||act==='next'){ persist(); S.date=addDays(S.date,act==='prev'?-1:1); S.showMeasure=false; S.swapOpen=null; render(); }
+  else if(act==='swap-open'){ S.swapOpen=S.swapOpen===b.dataset.slot?null:b.dataset.slot; render(); }
+  else if(act==='swap'){
+    var ws=getW(S.date,true); ws.swaps=ws.swaps||{}; ws.swaps[b.dataset.slot]=b.dataset.choice;
+    S.swapOpen=null; touchPath('workouts/'+S.date+'.json'); render();
+  }
+  else if(act==='extra-add'){
+    var et=document.getElementById('ex-text'),ek=document.getElementById('ex-k'),ep=document.getElementById('ex-p');
+    var txt=et?et.value.trim():''; if(!txt){ if(et) et.focus(); return; }
+    var fx=foodDay(S.date,true); fx.extra=fx.extra||[];
+    fx.extra.push({text:txt,k:ek?int(ek.value):null,p:ep?int(ep.value):null});
+    touchFood(S.date); render();
+    var ne=document.getElementById('ex-text'); if(ne) ne.focus();
+  }
+  else if(act==='extra-del'){
+    var fdel=foodDay(S.date,false); if(!fdel||!fdel.extra) return;
+    fdel.extra.splice(+b.dataset.i,1); touchFood(S.date); render();
+  }
   else if(act==='show-measure'){ S.showMeasure=true; render(); var wi=document.getElementById('in-waist'); if(wi) wi.focus(); }
   else if(act==='type'){ var wo=getW(S.date,true); if(wo.type===b.dataset.type) return; wo.type=b.dataset.type; touchPath('workouts/'+S.date+'.json'); render(); }
   else if(act==='addset'){
     var id=b.dataset.ex,n=+b.dataset.n,w=getW(S.date,true);
+    if(b.dataset.slot){ w.swaps=w.swaps||{}; w.swaps[b.dataset.slot]=id; }
     var rows=w.sets[id]||(w.sets[id]=[]);
     while(rows.length<n) rows.push({w:null,r:null});
     rows.push({w:null,r:null});
@@ -708,6 +784,7 @@ view.addEventListener('input',function(e){
   var t=e.target;
   if(t.dataset.f){
     var wo=getW(S.date,true),id=t.dataset.ex,i=+t.dataset.i;
+    if(t.dataset.slot){ wo.swaps=wo.swaps||{}; wo.swaps[t.dataset.slot]=id; }
     var rows=wo.sets[id]||(wo.sets[id]=[]);
     while(rows.length<=i) rows.push({w:null,r:null});
     var row={w:rows[i].w==null?null:rows[i].w,r:rows[i].r==null?null:rows[i].r};
