@@ -5,8 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://api.github.com; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="referrer" content="no-referrer">
-<meta name="theme-color" content="#edf0f3" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0e1217" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#19212c">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -15,10 +14,7 @@
 <link rel="icon" type="image/png" href="icons/icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
 <title>Журнал зала</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans+Extra+Condensed:wght@500;600;700&family=Golos+Text:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="app.css?v=7">
 </head>
 <body>
 <header class="top">
@@ -43,14 +39,12 @@
 
 <nav class="tabs" aria-label="Разделы">
   <div class="tabs-in" id="tabs" role="tablist">
-    <button type="button" role="tab" data-tab="today" aria-selected="true">Сегодня</button>
-    <button type="button" role="tab" data-tab="food" aria-selected="false">Еда</button>
-    <button type="button" role="tab" data-tab="body" aria-selected="false">Тело</button>
-    <button type="button" role="tab" data-tab="history" aria-selected="false">История</button>
-    <button type="button" role="tab" data-tab="program" aria-selected="false">Программа</button>
+    <button type="button" role="tab" data-tab="overview" aria-selected="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4v16h16M8 15l4-5 4 2 4-7"/></svg><span>Обзор</span></button>
+    <button type="button" role="tab" data-tab="today" aria-selected="false"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8v8m10-8v8M4 10v4m16-4v4M7 12h10"/></svg><span>Тренировка</span></button>
+    <button type="button" role="tab" data-tab="food" aria-selected="false"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3v6a3 3 0 0 0 6 0V3M8 3v18M18 3v18m0-18c-3 3-3 7 0 8"/></svg><span>Еда</span></button>
   </div>
 </nav>
 <noscript><p class="wrap">Для журнала нужен включённый JavaScript.</p></noscript>
-<script src="app.js"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

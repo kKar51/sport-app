@@ -15,6 +15,7 @@ function pad(n){ return String(n).padStart(2,'0'); }
 function ymd(d){ return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); }
 function parseYmd(s){ var p=s.split('-').map(Number); return new Date(p[0],p[1]-1,p[2]); }
 function addDays(s,n){ var d=parseYmd(s); d.setDate(d.getDate()+n); return ymd(d); }
+function addMonths(s,n){ var d=parseYmd(s),day=d.getDate(); d.setDate(1); d.setMonth(d.getMonth()+n); d.setDate(Math.min(day,new Date(d.getFullYear(),d.getMonth()+1,0).getDate())); return ymd(d); }
 function daysBetween(a,b){ return Math.round((parseYmd(b)-parseYmd(a))/864e5); }
 function isoDow(s){ var g=parseYmd(s).getDay(); return g===0?7:g; }
 function monday(s){ return addDays(s,1-isoDow(s)); }
@@ -22,6 +23,8 @@ function todayStr(){ return ymd(new Date()); }
 var fmtDayI=new Intl.DateTimeFormat('ru-RU',{weekday:'short',day:'numeric',month:'short'});
 var fmtShortI=new Intl.DateTimeFormat('ru-RU',{day:'numeric',month:'short'});
 var fmtLongI=new Intl.DateTimeFormat('ru-RU',{day:'numeric',month:'long'});
+var fmtMonthI=new Intl.DateTimeFormat('ru-RU',{month:'long',year:'numeric'});
+var fmtDateI=new Intl.DateTimeFormat('ru-RU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
 function fmtDay(s){ var t=fmtDayI.format(parseYmd(s)); return t.charAt(0).toUpperCase()+t.slice(1); }
 function fmtShort(s){ return fmtShortI.format(parseYmd(s)); }
 function fmtLong(s){ return fmtLongI.format(parseYmd(s)); }
@@ -38,6 +41,12 @@ function plural(n,a,b,c){ var m10=n%10,m100=n%100; if(m10===1&&m100!==11) return
 
 /* ---------- local store + GitHub sync ---------- */
 var LS_KEY='sport-journal.v1';
+var UPGRADE_BACKUP_KEY='sport-journal.backup.before-night-v1';
+var backupError='';
+function backupBeforeUpgrade(){
+  try{ var raw=localStorage.getItem(LS_KEY); if(raw&&!localStorage.getItem(UPGRADE_BACKUP_KEY)) localStorage.setItem(UPGRADE_BACKUP_KEY,raw); }
+  catch(e){ backupError='Не удалось создать дополнительную копию на телефоне. Скачай копию данных в настройках.'; }
+}
 var DEFAULT_CFG={owner:'kKar51',repo:'sport',branch:'main',token:''};
 var DATA_RE=/^(program\.json|workouts\/\d{4}-\d{2}-\d{2}\.json|body\/\d{4}-\d{2}\.json|food\/\d{4}-\d{2}\.json)$/;
 var Store={cfg:Object.assign({},DEFAULT_CFG),files:{},pending:{},lastSync:0,lastPull:0,state:'idle',err:'',q:Promise.resolve(),timer:null,persistTimer:null,localErr:''};
@@ -72,6 +81,7 @@ function gh(method,path,body){
 function httpErr(res){ var e=new Error('http '+res.status); e.kind='http'; e.status=res.status; e.rate=res.headers.get('x-ratelimit-remaining')==='0'; return e; }
 function errText(e){
   if(!e) return '';
+  if(e.kind==='conflict') return 'В GitHub есть другая версия файла. Обе версии сохранены: скачай копию из настроек для сравнения';
   if(e.kind==='net') return 'Нет сети. Записи в телефоне, отправятся позже';
   switch(e.status){
     case 401: return 'Токен не подходит или истёк';
@@ -129,10 +139,9 @@ async function putFile(path,text,sha){
   var res=await gh('PUT',url,body);
   if(res.status===409||res.status===422){
     var cur=await gh('GET',url+'?ref='+encodeURIComponent(branch()));
-    if(cur.ok){ var cj=await cur.json(); body.sha=cj.sha; }
-    else if(cur.status===404){ delete body.sha; }
-    else throw httpErr(cur);
-    res=await gh('PUT',url,body);
+    if(cur.ok){ var cj=await cur.json(); if(cj.content&&b64dec(cj.content)===text) return cj.sha; }
+    else if(cur.status!==404) throw httpErr(cur);
+    var conflict=new Error('Remote file changed'); conflict.kind='conflict'; throw conflict;
   }
   if(!res.ok) throw httpErr(res);
   var j=await res.json();
@@ -171,6 +180,8 @@ async function pull(){
     if(!b.ok) throw httpErr(b);
     var bj=await b.json(),data;
     try{ data=JSON.parse(b64dec(bj.content)); }catch(e){ continue; }
+    // An input event may have changed this file while the blob was downloading.
+    if(Store.pending[p]||Store.files[p]!==f) continue;
     Store.files[p]={sha:sha,data:data};
   }
   Object.keys(Store.files).forEach(function(p){ if(!remote[p]&&!Store.pending[p]&&Store.files[p].sha) delete Store.files[p]; });
@@ -179,7 +190,7 @@ async function pull(){
 }
 
 /* ---------- app state ---------- */
-var S={program:null,workouts:{},body:{},food:{},tab:'today',date:todayStr(),exSel:null,showMeasure:false,swapOpen:null};
+var S={program:null,workouts:{},body:{},food:{},tab:'overview',date:todayStr(),exSel:null,showMeasure:false,swapOpen:null,calendarMonth:null,returnTab:'overview'};
 var TYPES=[['A','Верх A'],['L','Ноги'],['B','Верх B'],['run','Бег'],['rest','Отдых']];
 
 function rebuild(){
@@ -313,21 +324,94 @@ function renderHeader(){
   for(var i=1;i<=p.weeks;i++){ var k=phaseOf(i).key; h+='<span class="'+k+(i<w?'':i===w?' now':' future')+'"></span>'; }
   stripEl.innerHTML=h;
 }
-function paintTabs(){ Array.prototype.forEach.call(tabsEl.querySelectorAll('button'),function(b){ b.setAttribute('aria-selected',String(b.dataset.tab===S.tab)); }); }
+function paintTabs(){ var active=['body','history','program','settings'].indexOf(S.tab)>=0?'overview':S.tab; Array.prototype.forEach.call(tabsEl.querySelectorAll('button'),function(b){ b.setAttribute('aria-selected',String(b.dataset.tab===active)); }); }
+
+function uiIcon(name){
+  var paths={left:'<path d="m14 6-6 6 6 6"/>',right:'<path d="m10 6 6 6-6 6"/>',calendar:'<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16"/>',back:'<path d="m10 5-7 7 7 7M3 12h18"/>'};
+  return '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+(paths[name]||'')+'</svg>';
+}
+function navigate(tab,date){ persist(); S.tab=tab; if(date) S.date=date; S.calendarMonth=null; S.swapOpen=null; render(); window.scrollTo(0,0); }
+function overviewLink(tab,label){ return '<button class="overview-link" type="button" data-act="navigate" data-tab="'+tab+'"'+(tab==='body'?' data-date="'+todayStr()+'"':'')+'>'+esc(label)+'<span>Открыть</span></button>'; }
+function recordedWorkout(w){ return Object.keys(w.sets||{}).some(function(id){ return filled(w.sets[id]).length; })||!!(w.run&&(w.run.min>0||w.run.km>0)); }
+function renderOverview(){
+  var today=todayStr(),dates=sortedDates(true).filter(function(d){return d<=today&&recordedWorkout(S.workouts[d]);}),latest=dates[0],seen={},results=[];
+  dates.forEach(function(d){ var w=S.workouts[d]; Object.keys(w.sets||{}).forEach(function(id){
+    if(seen[id]) return; var rows=filled(w.sets[id]); if(!rows.length) return; seen[id]=true;
+    var ex=findEx(id)||{name:id},best=rows.slice().sort(function(a,b){ return (b.w||0)-(a.w||0)||b.r-a.r; })[0];
+    results.push({id:id,date:d,ex:ex,best:best});
+  }); });
+  var weights=bodySeries('weights').filter(function(x){return x[0]<=today;}),last=weights[weights.length-1],first=last&&weights.filter(function(x){return x[0]>=addDays(last[0],-30);})[0];
+  var weekStart=monday(today),count=dates.filter(function(d){return d>=weekStart;}).length;
+  var h='<div class="overview-title"><p class="eyebrow">'+esc(fmtDay(today))+'</p><h2>Твои результаты</h2><p class="muted small">По внесённым записям</p></div>';
+  h+='<section class="overview-section"><div class="section-line"><h3>В упражнениях</h3><button type="button" class="text-button" data-act="navigate" data-tab="history">История</button></div>';
+  if(results.length){
+    h+='<p class="small muted">Лучший подход последней записи каждого упражнения</p><div class="result-list">';
+    results.slice(0,3).forEach(function(r){ h+='<button type="button" class="result-row" data-act="exercise-history" data-ex="'+esc(r.id)+'"><span>'+esc(r.ex.name)+'<small>'+esc(fmtShort(r.date))+'</small></span><span class="result-value">'+esc(setTxt(r.ex,r.best))+'<small>'+esc(r.ex.noWeight?(r.ex.repsUnit||'повторы'):(r.ex.unit||'кг')+' × повторы')+'</small></span></button>'; });
+    h+='</div>';
+  } else h+='<p class="muted mt12">Здесь появятся результаты после первой записи подходов.</p>';
+  h+='</section><div class="overview-metrics"><div><span class="small muted">Вес'+(last?' · '+esc(fmtShort(last[0])):'')+'</span><strong>'+(last?fmtN(last[1])+'<small>кг</small>':'—')+'</strong><span class="small muted">'+(last&&first&&first[0]!==last[0]?signed(last[1]-first[1],'кг')+' с '+esc(fmtShort(first[0])):'Записывай в разделе замеров')+'</span></div><div><span class="small muted">С '+esc(fmtShort(weekStart))+'</span><strong>'+count+'</strong><span class="small muted">'+plural(count,'тренировка записана','тренировки записано','тренировок записано')+'</span></div></div>';
+  h+='<button class="btn overview-start" type="button" data-act="navigate" data-tab="today" data-date="'+today+'">'+(S.workouts[today]?'Открыть тренировку':'Тренировка на сегодня')+'</button>';
+  if(latest) h+='<button class="overview-link" type="button" data-act="navigate" data-tab="today" data-date="'+latest+'"><span>Последняя запись<small>'+esc(fmtShort(latest))+' · '+esc(typeTitle(S.workouts[latest].type))+'</small></span><span>Открыть</span></button>';
+  if(NUT()){
+    var day=foodDay(today,false),tot=foodTotals(day);
+    h+='<section class="overview-section"><div class="section-line"><h3>Питание сегодня</h3><button class="text-button" type="button" data-act="navigate" data-tab="food" data-date="'+today+'">Открыть</button></div><p class="small muted">'+(day?thousands(tot.kcal)+' ккал · '+fmtN(tot.p)+' г белка учтено':'Пока нет записей')+'</p>'+((tot.unknown||tot.unknownP)?'<p class="small muted">Итог неполный: без калорий '+tot.unknown+', без белка '+tot.unknownP+'.</p>':'')+'</section>';
+  }
+  h+='<div class="overview-more">'+overviewLink('body','Вес и замеры')+overviewLink('history','История тренировок')+overviewLink('program','Моя программа')+'</div>';
+  return h;
+}
 
 /* ---------- render: today ---------- */
 function datebar(d){
   var p=P(),w=weekOf(d),t=todayStr();
   var rel=d===t?'Сегодня':d===addDays(t,-1)?'Вчера':d===addDays(t,1)?'Завтра':'';
   var weekLbl=(w>=1&&w<=p.weeks)?'неделя '+w:'';
-  return '<div class="datebar"><button class="icon-btn" type="button" data-act="prev" aria-label="Предыдущий день">‹</button>'+
-    '<div class="d"><b>'+esc(fmtDay(d))+'</b><span>'+esc([rel,weekLbl].filter(Boolean).join(' · ')||' ')+'</span></div>'+
-    '<button class="icon-btn" type="button" data-act="next" aria-label="Следующий день">›</button></div>';
+  return '<div class="datebar"><button class="icon-btn" type="button" data-act="prev" aria-label="Предыдущий день">'+uiIcon('left')+'</button>'+
+    '<button class="d" type="button" data-act="calendar-toggle" aria-expanded="'+!!S.calendarMonth+'" aria-controls="calendar-panel" aria-label="Выбрать дату: '+esc(fmtDateI.format(parseYmd(d)))+'"><b>'+esc(fmtDay(d))+' '+uiIcon('calendar')+'</b><span>'+esc([rel,weekLbl].filter(Boolean).join(' · ')||' ')+'</span></button>'+
+    '<button class="icon-btn" type="button" data-act="next" aria-label="Следующий день">'+uiIcon('right')+'</button></div>'+renderCalendar();
+}
+function renderCalendar(){
+  if(!S.calendarMonth) return '<section id="calendar-panel" hidden></section>';
+  var first=S.calendarMonth,t=todayStr(),count=new Date(parseYmd(first).getFullYear(),parseYmd(first).getMonth()+1,0).getDate();
+  var h='<section class="panel calendar" id="calendar-panel" aria-labelledby="calendar-title">'+
+    '<div class="calendar-head"><button class="icon-btn" type="button" data-act="calendar-prev" aria-label="Предыдущий месяц">'+uiIcon('left')+'</button>'+
+    '<h2 id="calendar-title" aria-live="polite">'+esc(fmtMonthI.format(parseYmd(first)))+'</h2>'+
+    '<button class="icon-btn" type="button" data-act="calendar-next" aria-label="Следующий месяц">'+uiIcon('right')+'</button></div>'+
+    '<div class="calendar-week" aria-hidden="true">'+['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(function(day){ return '<span>'+day+'</span>'; }).join('')+'</div>'+
+    '<div class="calendar-days" role="group" aria-label="Дни месяца">';
+  for(var i=1;i<isoDow(first);i++) h+='<span aria-hidden="true"></span>';
+  for(var day=1;day<=count;day++){
+    var d=first.slice(0,8)+pad(day);
+    h+='<button class="calendar-day" type="button" data-act="calendar-day" data-date="'+d+'" aria-label="'+esc(fmtDateI.format(parseYmd(d)))+'" aria-pressed="'+(d===S.date)+'"'+(d===t?' aria-current="date"':'')+'>'+day+'</button>';
+  }
+  return h+'</div><div class="calendar-foot"><button class="btn-ghost" type="button" data-act="calendar-today">Сегодня</button>'+
+    '<button class="btn-ghost" type="button" data-act="calendar-close">Закрыть</button></div></section>';
+}
+function focusDateControl(selector){ var el=view.querySelector(selector); if(el) el.focus({preventScroll:true}); }
+function selectDate(d,act){
+  persist(); S.date=d; S.showMeasure=false; S.swapOpen=null; S.calendarMonth=null; render();
+  focusDateControl('[data-act="'+(act||'calendar-toggle')+'"]');
+}
+function closeCalendar(){ S.calendarMonth=null; render(); focusDateControl('[data-act="calendar-toggle"]'); }
+function calendarKey(e){
+  if(!S.calendarMonth) return false;
+  if(e.key==='Escape'){ e.preventDefault(); closeCalendar(); return true; }
+  var d=e.target.dataset.date,next;
+  if(!d||e.target.dataset.act!=='calendar-day') return false;
+  if(e.key==='ArrowLeft') next=addDays(d,-1);
+  else if(e.key==='ArrowRight') next=addDays(d,1);
+  else if(e.key==='ArrowUp') next=addDays(d,-7);
+  else if(e.key==='ArrowDown') next=addDays(d,7);
+  else if(e.key==='Home') next=monday(d);
+  else if(e.key==='End') next=addDays(monday(d),6);
+  else if(e.key==='PageUp') next=addMonths(d,-1);
+  else if(e.key==='PageDown') next=addMonths(d,1);
+  else return false;
+  e.preventDefault(); S.calendarMonth=next.slice(0,7)+'-01'; render();
+  focusDateControl('[data-date="'+next+'"]'); return true;
 }
 function renderToday(){
   var d=S.date,w=weekOf(d),ph=phaseOf(w),type=typeOf(d),wo=S.workouts[d];
   var h=datebar(d);
-  h+=quickPanel(d);
   h+='<div class="chips" role="group" aria-label="Что сегодня">'+TYPES.map(function(x){
     return '<button class="chip" type="button" data-act="type" data-type="'+x[0]+'" aria-pressed="'+(x[0]===type)+'">'+esc(typeTitle(x[0]))+(x[0]===plannedType(d)?'<small> · план</small>':'')+'</button>';
   }).join('')+'</div>';
@@ -335,6 +419,7 @@ function renderToday(){
   if(type==='rest') h+=restBlock();
   else if(type==='run') h+=runBlock(d,w,wo);
   else h+=sessionBlock(type,d,w,wo);
+  h+='<p class="sec">Вес, сон и шаги</p>'+quickPanel(d);
   h+='<div class="field"><label for="in-note">Заметка</label><textarea id="in-note" data-note="1" rows="2" placeholder="Самочувствие, сон, что мешало">'+esc(wo&&wo.note||'')+'</textarea></div>';
   return h;
 }
@@ -423,16 +508,16 @@ function sessionBlock(type,d,w,wo){
 function NUT(){ var p=P(); return p&&p.nutrition; }
 function mealOption(meal,id){ for(var i=0;i<meal.options.length;i++) if(meal.options[i].id===id) return meal.options[i]; return null; }
 function foodTotals(day){
-  var n=NUT(),res={kcal:0,p:0,onPlan:0,marked:0,unknown:0,total:n.meals.length};
+  var n=NUT(),res={kcal:0,p:0,onPlan:0,marked:0,unknown:0,unknownP:0,total:n.meals.length};
   if(!day) return res;
   n.meals.forEach(function(meal){
     var m=day.meals[meal.id]; if(!m||!m.opt) return;
     res.marked++;
     if(m.opt==='skip') return;
-    if(m.opt==='other'){ if(m.k!=null) res.kcal+=m.k; else res.unknown++; if(m.p!=null) res.p+=m.p; return; }
+    if(m.opt==='other'){ if(m.k!=null) res.kcal+=m.k; else res.unknown++; if(m.p!=null) res.p+=m.p; else res.unknownP++; return; }
     var o=mealOption(meal,m.opt); if(o){ res.kcal+=o.kcal; res.p+=o.p; res.onPlan++; }
   });
-  (day.extra||[]).forEach(function(x){ if(x.k!=null) res.kcal+=x.k; else res.unknown++; if(x.p!=null) res.p+=x.p; });
+  (day.extra||[]).forEach(function(x){ if(x.k!=null) res.kcal+=x.k; else res.unknown++; if(x.p!=null) res.p+=x.p; else res.unknownP++; });
   if(day.sweets==='plan') res.kcal+=n.sweets.plan||150;
   else if(day.sweets==='over') res.kcal+=n.sweets.over||450;
   return res;
@@ -447,16 +532,18 @@ function renderFood(){
   if(!n){ return h+'<div class="panel"><p class="muted small">План питания ещё не загружен. Он появится после синхронизации.</p></div>'; }
   var day=foodDay(d,false),tot=foodTotals(day);
   h+='<div class="panel nut-sum">'+bar(tot.kcal,n.targets.kcal,'Калории','ккал')+bar(tot.p,n.targets.protein,'Белок','г')+
-    '<p class="small muted">По плану '+tot.onPlan+' из '+tot.total+(tot.unknown?' · без калорий: '+tot.unknown+' '+plural(tot.unknown,'запись','записи','записей')+', их посчитаем при разборе':'')+'. '+esc(n.goalLine||'')+'</p></div>';
+    '<p class="small muted" id="food-completeness">'+foodCompleteness(tot)+'</p></div>';
   h+='<ol class="meals">';
   n.meals.forEach(function(meal){
     var m=(day&&day.meals[meal.id])||{};
-    h+='<li class="meal"><div class="ses-head"><h3>'+esc(meal.title)+'</h3><span>'+esc(meal.time||'')+'</span></div><div class="opts">';
+    h+='<li class="meal"><div class="ses-head"><h3>'+esc(meal.title)+'</h3><span>'+esc(meal.time||'')+'</span></div>';
+    if(m.opt&&m.opt!=='other'&&m.opt!=='skip'){ var chosen=mealOption(meal,m.opt); if(chosen) h+='<p class="meal-selected">'+esc(chosen.text)+'</p>'; }
+    if(m.opt!=='other') h+='<div class="row"><button class="text-button" type="button" data-act="meal" data-meal="'+meal.id+'" data-opt="other">Записать, что ел</button></div>';
+    h+='<details class="meal-options"><summary>Варианты из программы'+(m.opt==='skip'?' · пропущено':'')+'</summary><div class="opts">';
     meal.options.forEach(function(o){
       h+='<button class="opt" type="button" data-act="meal" data-meal="'+meal.id+'" data-opt="'+o.id+'" aria-pressed="'+(m.opt===o.id)+'"><span>'+esc(o.text)+'</span><small>~'+o.kcal+' ккал · '+o.p+' г белка</small></button>';
     });
-    h+='<div class="row"><button class="chip" type="button" data-act="meal" data-meal="'+meal.id+'" data-opt="other" aria-pressed="'+(m.opt==='other')+'">Другое</button>'+
-       '<button class="chip" type="button" data-act="meal" data-meal="'+meal.id+'" data-opt="skip" aria-pressed="'+(m.opt==='skip')+'">Пропустил</button></div>';
+    h+='<button class="text-button" type="button" data-act="meal" data-meal="'+meal.id+'" data-opt="skip" aria-pressed="'+(m.opt==='skip')+'">Пропустил</button></div></details>';
     if(m.opt==='other'){
       h+='<div class="other"><div class="field"><label for="fo-t-'+meal.id+'">Что съел</label><input class="txt" id="fo-t-'+meal.id+'" data-food="text" data-meal="'+meal.id+'" autocomplete="off" value="'+esc(m.text||'')+'" placeholder="например, пицца, 3 куска"></div>'+
          '<div class="two"><div class="field"><label for="fo-k-'+meal.id+'">Ккал, если знаешь</label><input class="txt" id="fo-k-'+meal.id+'" data-food="k" data-meal="'+meal.id+'" inputmode="numeric" autocomplete="off" value="'+esc(m.k==null?'':m.k)+'"></div>'+
@@ -477,7 +564,7 @@ function renderFood(){
      '<div class="two"><div class="field"><label for="ex-k">Ккал, если знаешь</label><input class="txt" id="ex-k" inputmode="numeric" autocomplete="off"></div>'+
      '<div class="field"><label for="ex-p">Белок, г</label><input class="txt" id="ex-p" inputmode="numeric" autocomplete="off"></div></div>'+
      '<div class="row"><button class="btn" type="button" data-act="extra-add">Добавить</button></div></div>'+
-     '<p class="small muted mt8">Пиши своими словами и с граммами, если знаешь. Калории можно не указывать: при разборе питания их посчитают по описанию.</p></div>';
+     '<p class="small muted mt8">Пиши блюдо, граммы или название кафе. Неизвестные калории и белок сохраняются как пропуски и не входят в итог.</p></div>';
   var sw=day&&day.sweets;
   h+='<div class="panel"><div class="ses-head"><h3>Сладкое</h3><span>'+esc(n.sweets.limit||'')+'</span></div><div class="row mt8">'+
     [['none','Не было'],['plan','По плану'],['over','Больше плана']].map(function(x){ return '<button class="chip" type="button" data-act="sweets" data-val="'+x[0]+'" aria-pressed="'+(sw===x[0])+'">'+x[1]+'</button>'; }).join('')+
@@ -500,10 +587,11 @@ function renderFood(){
   return h;
 }
 function paintMeters(){ Array.prototype.forEach.call(view.querySelectorAll('.meter-track i[data-w]'),function(el){ el.style.width=el.getAttribute('data-w')+'%'; }); }
+function foodCompleteness(tot){ return (tot.unknown||tot.unknownP)?'Итог неполный · без калорий: '+tot.unknown+' · без белка: '+tot.unknownP:'Сумма внесённых значений. Неотмеченные приёмы пищи не учтены.'; }
 
 /* ---------- render: body ---------- */
 function chartSVG(points,avg){
-  var W=600,H=220,pl=42,pr=56,pt=14,pb=28;
+  var cs=getComputedStyle(view),W=Math.max(240,Math.round(view.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight))),H=220,pl=42,pr=56,pt=14,pb=28;
   var d0=points[0][0],d1=points[points.length-1][0],span=Math.max(1,daysBetween(d0,d1));
   var vals=points.map(function(p){ return p[1]; });
   var lo=Math.min.apply(null,vals),hi=Math.max.apply(null,vals);
@@ -532,7 +620,7 @@ function renderBody(){
   var since=[];
   if(wa.length>1) since.push('талия '+signed(waistNow-first(wa),'см'));
   if(lo.length>1) since.push('низ '+signed(lowNow-first(lo),'см'));
-  var h='<div class="tiles">'+
+  var h='<div class="ses-head"><h2>Вес и замеры</h2></div>'+datebar(S.date)+quickPanel(S.date)+'<p class="sec">Динамика</p><div class="tiles">'+
     '<div class="tile"><span>Вес, среднее за 7 дней</span><b>'+(a7!=null?fmtN(Math.round(a7*10)/10):'—')+'</b><span class="'+(delta==null?'':delta<=0?'good':'bad')+'">'+(delta==null?'кг':signed(delta,'кг')+' к прошлой неделе')+'</span></div>'+
     '<div class="tile"><span>Талия · низ живота</span><b>'+(waistNow!=null?fmtN(waistNow):'—')+' · '+(lowNow!=null?fmtN(lowNow):'—')+'</b><span>'+esc(since.length?since.join(', ')+' от старта':'см')+'</span></div>'+
     '<div class="tile"><span>Шаги, среднее за 7 дней</span><b class="'+(s7==null?'':s7>=8000?'good':'bad')+'">'+thousands(s7)+'</b><span>цель '+esc(p.stepsTarget||'8–10 тыс.')+'</span></div>'+
@@ -543,7 +631,7 @@ function renderBody(){
   if(pts.length>=2){
     var avg=pts.map(function(q){ return [q[0],avgBetween(ws,addDays(q[0],-6),q[0])]; });
     h+=chartSVG(pts,avg)+'<div class="legend"><span><i class="dot"></i>утренний вес</span><span><i></i>среднее за 7 дней</span></div>';
-  } else h+='<p class="muted small">График появится после двух-трёх утренних взвешиваний. Вес вводится на вкладке «Сегодня».</p>';
+  } else h+='<p class="muted small">График появится после двух утренних взвешиваний.</p>';
   h+='</div>';
   var weeks={};
   var wk=function(d){ var m=monday(d); return weeks[m]=weeks[m]||{w:[],waist:null,lower:null,steps:[],sleep:[]}; };
@@ -663,7 +751,8 @@ function renderProgram(){
 /* ---------- render: settings ---------- */
 function renderSettings(){
   var c=Store.cfg,n=pendingCount();
-  var h='<div class="ses-head"><h2>Подключение</h2><span>записи хранятся в твоём приватном репозитории</span></div>';
+  var h='<div class="ses-head"><h2>Настройки</h2><span>Ночной лайм · версия 7</span></div>';
+  h+='<div class="panel"><h3>Копия данных</h3><p class="small muted mt8">Все записи, включая ожидающие синхронизации. Токен доступа в файл не включается.</p><div class="row mt8"><button type="button" class="btn" data-act="download-backup">Скачать копию данных</button><button type="button" class="btn-ghost" data-act="download-upgrade-backup">Копия до обновления</button></div><p class="small muted mt8" id="backup-msg">'+esc(backupError)+'</p></div>';
   if(Store.state==='error'&&Store.err) h+='<div class="banner">'+esc(Store.err)+'</div>';
   h+='<div class="panel form">'+
     '<div class="field"><label for="cfg-owner">Владелец</label><input class="txt" id="cfg-owner" value="'+esc(c.owner)+'" autocomplete="off" autocapitalize="off" spellcheck="false"></div>'+
@@ -687,6 +776,18 @@ function renderSettings(){
   return h;
 }
 function exportJSON(){ return JSON.stringify({exportedAt:new Date().toISOString(),program:S.program,workouts:S.workouts,body:S.body,food:S.food},null,2); }
+function downloadBackup(before){
+  var msg=document.getElementById('backup-msg');
+  try{
+    var data=before?JSON.parse(localStorage.getItem(UPGRADE_BACKUP_KEY)||'null'):{cfg:Store.cfg,files:Store.files,pending:Store.pending,lastSync:Store.lastSync};
+    if(!data){ if(msg) msg.textContent='Копии до обновления нет. Можно скачать текущие записи.'; return; }
+    var c=data.cfg||{},out={format:LS_KEY,exportedAt:new Date().toISOString(),cfg:{owner:c.owner,repo:c.repo,branch:c.branch},files:data.files||{},pending:data.pending||{},lastSync:data.lastSync||0};
+    var url=URL.createObjectURL(new Blob([JSON.stringify(out,null,2)],{type:'application/json'})),a=document.createElement('a');
+    a.href=url; a.download='sport-'+(before?'before-update-':'backup-')+todayStr()+'.json'; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); },60000);
+    if(msg) msg.textContent='Копия подготовлена. Сохрани файл в «Файлы».';
+  }catch(e){ if(msg) msg.textContent='Не удалось скачать копию. Используй «Скопировать все данные» ниже.'; }
+}
 function copyData(){
   var txt=exportJSON(),msg=document.getElementById('copy-msg'),ta=document.getElementById('copy-area');
   var fallback=function(){ if(msg) msg.textContent='Скопировать автоматически не получилось: выдели текст ниже и скопируй.'; if(ta){ ta.hidden=false; ta.value=txt; ta.focus(); ta.select(); } };
@@ -706,8 +807,10 @@ function render(){
     view.innerHTML=h; return;
   }
   var out='';
+  if(['body','history','program'].indexOf(S.tab)>=0) out+='<button type="button" class="back-link" data-act="navigate" data-tab="overview">'+uiIcon('back')+'Обзор</button>';
   if(!hasToken()&&pendingCount()) out+='<div class="banner">Записи пока только в этом телефоне. Подключи GitHub в настройках, чтобы они не потерялись.</div>';
-  if(S.tab==='today') out+=renderToday();
+  if(S.tab==='overview') out+=renderOverview();
+  else if(S.tab==='today') out+=renderToday();
   else if(S.tab==='food') out+=renderFood();
   else if(S.tab==='body') out+=renderBody();
   else if(S.tab==='history') out+=renderHistory();
@@ -717,20 +820,33 @@ function render(){
 }
 function soft(){
   var a=document.activeElement;
-  if(a&&view.contains(a)&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)){ renderHeader(); paintSync(); return; }
+  if(a&&view.contains(a)&&(/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)||a.closest('.calendar'))){ renderHeader(); paintSync(); return; }
   render();
 }
 
 /* ---------- events ---------- */
 tabsEl.addEventListener('click',function(e){
   var b=e.target.closest('button[data-tab]'); if(!b) return;
-  persist(); S.tab=b.dataset.tab; render(); window.scrollTo(0,0);
+  navigate(b.dataset.tab);
 });
-gearEl.addEventListener('click',function(){ persist(); S.tab=S.tab==='settings'?'today':'settings'; render(); window.scrollTo(0,0); });
+gearEl.addEventListener('click',function(){ if(S.tab==='settings') navigate(S.returnTab); else {S.returnTab=S.tab; navigate('settings');} });
 view.addEventListener('click',function(e){
   var b=e.target.closest('[data-act]'); if(!b||b.disabled) return;
   var act=b.dataset.act;
-  if(act==='prev'||act==='next'){ persist(); S.date=addDays(S.date,act==='prev'?-1:1); S.showMeasure=false; S.swapOpen=null; render(); }
+  if(act==='navigate') navigate(b.dataset.tab,b.dataset.date);
+  else if(act==='exercise-history'){ S.exSel=b.dataset.ex; navigate('history'); }
+  else if(act==='download-backup'||act==='download-upgrade-backup') downloadBackup(act==='download-upgrade-backup');
+  else if(act==='prev'||act==='next') selectDate(addDays(S.date,act==='prev'?-1:1),act);
+  else if(act==='calendar-toggle'){
+    if(S.calendarMonth) closeCalendar();
+    else { persist(); S.calendarMonth=S.date.slice(0,7)+'-01'; render(); focusDateControl('[data-date="'+S.date+'"]'); }
+  }
+  else if(act==='calendar-prev'||act==='calendar-next'){
+    S.calendarMonth=addMonths(S.calendarMonth,act==='calendar-prev'?-1:1); render(); focusDateControl('[data-act="'+act+'"]');
+  }
+  else if(act==='calendar-day') selectDate(b.dataset.date);
+  else if(act==='calendar-today') selectDate(todayStr());
+  else if(act==='calendar-close') closeCalendar();
   else if(act==='swap-open'){ S.swapOpen=S.swapOpen===b.dataset.slot?null:b.dataset.slot; render(); }
   else if(act==='swap'){
     var ws=getW(S.date,true); ws.swaps=ws.swaps||{}; ws.swaps[b.dataset.slot]=b.dataset.choice;
@@ -774,7 +890,7 @@ view.addEventListener('click',function(e){
     Store.cfg.owner=v('cfg-owner')||DEFAULT_CFG.owner; Store.cfg.repo=v('cfg-repo')||DEFAULT_CFG.repo; Store.cfg.branch=v('cfg-branch')||'main';
     var tk=v('cfg-token'); if(tk) Store.cfg.token=tk;
     Store.state='idle'; Store.err=''; persist(); render();
-    syncNow().then(function(){ if(!Store.err&&S.program&&S.tab==='settings'){ S.tab='today'; } soft(); });
+    syncNow().then(function(){ if(!Store.err&&S.program&&S.tab==='settings'){ S.tab='overview'; } soft(); });
   }
   else if(act==='forget-token'){ Store.cfg.token=''; Store.state='idle'; Store.err=''; persist(); render(); }
   else if(act==='sync'){ syncNow().then(soft); render(); }
@@ -787,7 +903,7 @@ view.addEventListener('input',function(e){
     if(t.dataset.slot){ wo.swaps=wo.swaps||{}; wo.swaps[t.dataset.slot]=id; }
     var rows=wo.sets[id]||(wo.sets[id]=[]);
     while(rows.length<=i) rows.push({w:null,r:null});
-    var row={w:rows[i].w==null?null:rows[i].w,r:rows[i].r==null?null:rows[i].r};
+    var row=Object.assign({},rows[i],{w:rows[i].w==null?null:rows[i].w,r:rows[i].r==null?null:rows[i].r});
     row[t.dataset.f]=t.dataset.f==='r'?int(t.value):num(t.value);
     rows[i]=row; touchPath('workouts/'+S.date+'.json');
   } else if(t.dataset.run){
@@ -804,12 +920,14 @@ view.addEventListener('input',function(e){
     var tot=foodTotals(fd),bars=view.querySelectorAll('.nut-sum .meter');
     if(bars.length===2){ bars[0].outerHTML=bar(tot.kcal,NUT().targets.kcal,'Калории','ккал'); }
     bars=view.querySelectorAll('.nut-sum .meter'); if(bars.length===2){ bars[1].outerHTML=bar(tot.p,NUT().targets.protein,'Белок','г'); }
+    var completeness=document.getElementById('food-completeness'); if(completeness) completeness.textContent=foodCompleteness(tot);
     paintMeters();
   }
 });
 view.addEventListener('change',function(e){ if(e.target.id==='ex-select'){ S.exSel=e.target.value; render(); } });
 view.addEventListener('focusout',function(e){ if(e.target.matches&&e.target.matches('input,textarea')) persist(); });
 view.addEventListener('keydown',function(e){
+  if(calendarKey(e)) return;
   if(e.key!=='Enter'||!e.target.classList||!e.target.classList.contains('cell')) return;
   e.preventDefault();
   var cells=Array.prototype.slice.call(view.querySelectorAll('input.cell'));
@@ -823,10 +941,18 @@ window.addEventListener('pagehide',persist);
 window.addEventListener('online',function(){ if(hasToken()) syncNow(); });
 
 /* ---------- boot ---------- */
-restore(); rebuild();
+backupBeforeUpgrade(); restore(); rebuild();
 if(!hasToken()&&!S.program) S.tab='settings';
 render();
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function(){});
+if('ResizeObserver' in window) new ResizeObserver(function(){
+  if(S.tab!=='body') return;
+  var chart=view.querySelector('svg.chart'); if(!chart) return;
+  var cs=getComputedStyle(view),width=Math.max(240,Math.round(view.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight)));
+  if(Math.abs(chart.viewBox.baseVal.width-width)<1) return;
+  var ws=bodySeries('weights'),pts=ws.filter(function(q){ return q[0]>=addDays(todayStr(),-55); });
+  if(pts.length>=2) chart.outerHTML=chartSVG(pts,pts.map(function(q){return [q[0],avgBetween(ws,addDays(q[0],-6),q[0])];}));
+}).observe(view);
 if(hasToken()) syncNow();
 var lastDay=todayStr();
 setInterval(function(){ var t=todayStr(); if(t!==lastDay){ if(S.date===lastDay) S.date=t; lastDay=t; soft(); } },60000);
