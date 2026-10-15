@@ -48,7 +48,7 @@ function backupBeforeUpgrade(){
   catch(e){ backupError='Не удалось создать дополнительную копию на телефоне. Скачай копию данных в настройках.'; }
 }
 var DEFAULT_CFG={owner:'kKar51',repo:'sport',branch:'main',token:''};
-var DATA_RE=/^(program\.json|workouts\/\d{4}-\d{2}-\d{2}\.json|body\/\d{4}-\d{2}\.json|food\/\d{4}-\d{2}\.json)$/;
+var DATA_RE=/^(program\.json|workouts\/\d{4}-\d{2}-\d{2}\.json|body\/\d{4}-\d{2}\.json|food\/\d{4}-\d{2}\.json|health\/\d{4}-\d{2}-\d{2}\.json)$/;
 var Store={cfg:Object.assign({},DEFAULT_CFG),files:{},pending:{},lastSync:0,lastPull:0,state:'idle',err:'',q:Promise.resolve(),timer:null,persistTimer:null,localErr:''};
 
 function persist(){
@@ -100,6 +100,7 @@ function msgFor(p){
   var m=p.match(/^workouts\/(.+)\.json$/); if(m) return 'Тренировка '+m[1];
   m=p.match(/^body\/(.+)\.json$/); if(m) return 'Вес и талия '+m[1];
   m=p.match(/^food\/(.+)\.json$/); if(m) return 'Питание '+m[1];
+  m=p.match(/^health\/(.+)\.json$/); if(m) return 'Сон и шаги '+m[1];
   return 'Обновление';
 }
 
@@ -190,17 +191,18 @@ async function pull(){
 }
 
 /* ---------- app state ---------- */
-var S={program:null,workouts:{},body:{},food:{},tab:'overview',date:todayStr(),exSel:null,showMeasure:false,swapOpen:null,calendarMonth:null,returnTab:'overview'};
+var S={program:null,workouts:{},body:{},food:{},health:{},tab:'overview',date:todayStr(),exSel:null,showMeasure:false,swapOpen:null,calendarMonth:null,returnTab:'overview',healthText:'',healthPreview:null,healthPreviewText:'',healthError:'',healthNotice:null,healthReadSequence:0};
 var TYPES=[['A','Верх A'],['L','Ноги'],['B','Верх B'],['run','Бег'],['rest','Отдых']];
 
 function rebuild(){
-  S.program=null; S.workouts={}; S.body={}; S.food={};
+  S.program=null; S.workouts={}; S.body={}; S.food={}; S.health={};
   Object.keys(Store.files).forEach(function(p){
     var d=Store.files[p].data;
     if(p==='program.json') S.program=d;
     else if(p.indexOf('workouts/')===0) S.workouts[p.slice(9,-5)]=d;
     else if(p.indexOf('body/')===0) S.body[p.slice(5,-5)]=d;
     else if(p.indexOf('food/')===0) S.food[p.slice(5,-5)]=d;
+    else if(p.indexOf('health/')===0) S.health[p.slice(7,-5)]=d;
   });
 }
 function ensureFile(path,init){ if(!Store.files[path]) Store.files[path]={sha:null,data:init}; return Store.files[path].data; }
@@ -291,13 +293,34 @@ function getW(d,create){
   var w=S.workouts[d]; if(w){ w.sets=w.sets||{}; w.run=w.run||{}; }
   return w;
 }
-function bodyGet(d,f){ var m=S.body[d.slice(0,7)]; return m&&m[f]&&typeof m[f][d]==='number'?m[f][d]:null; }
+function bodyManual(d,f){ var m=S.body[d.slice(0,7)]; return m&&m[f]&&typeof m[f][d]==='number'?m[f][d]:null; }
+function healthValue(d,f){
+  var h=S.health[d],key=f==='steps'?'steps':f==='sleep'?'sleepHours':null;
+  var v=key&&h&&h.format==='sport-health.day.v1'?h[key]:null;
+  return typeof v==='number'&&isFinite(v)&&v>=0?v:null;
+}
+function bodyGet(d,f){ var manual=bodyManual(d,f); return manual!=null?manual:healthValue(d,f); }
 function bodySet(d,f,v){
   var key=d.slice(0,7);
   var m=S.body[key]||(S.body[key]=ensureFile('body/'+key+'.json',{weights:{},waist:{}}));
   m[f]=m[f]||{}; if(v==null) delete m[f][d]; else m[f][d]=v;
 }
-function bodySeries(f){ var out=[]; Object.keys(S.body).forEach(function(k){ var o=S.body[k][f]||{}; Object.keys(o).forEach(function(d){ if(typeof o[d]==='number') out.push([d,o[d]]); }); }); return out.sort(function(a,b){ return a[0]<b[0]?-1:a[0]>b[0]?1:0; }); }
+function bodySeries(f){
+  var dates={};
+  Object.keys(S.body).forEach(function(k){ var o=S.body[k][f]||{}; Object.keys(o).forEach(function(d){ if(typeof o[d]==='number') dates[d]=1; }); });
+  if(f==='steps'||f==='sleep') Object.keys(S.health).forEach(function(d){ if(healthValue(d,f)!=null) dates[d]=1; });
+  return Object.keys(dates).sort().map(function(d){ return [d,bodyGet(d,f)]; });
+}
+function healthProvenance(d,f){
+  if(healthValue(d,f)==null) return '';
+  var h=S.health[d],source=h.source||'Apple Health',received=Date.parse(h.receivedAt);
+  if(bodyManual(d,f)!=null) return 'Вручную · импорт '+source+' сохранён отдельно';
+  return source+(isFinite(received)?' · обновлено '+fmtWhen(received):'');
+}
+function paintHealthProvenance(d,f){
+  var node=view.querySelector('[data-health-provenance="'+f+'"]');
+  if(node){ node.textContent=healthProvenance(d,f); node.hidden=!node.textContent; }
+}
 function foodDay(d,create){
   var key=d.slice(0,7),m=S.food[key];
   if(!m&&create) m=S.food[key]=ensureFile('food/'+key+'.json',{days:{}});
@@ -324,7 +347,7 @@ function renderHeader(){
   for(var i=1;i<=p.weeks;i++){ var k=phaseOf(i).key; h+='<span class="'+k+(i<w?'':i===w?' now':' future')+'"></span>'; }
   stripEl.innerHTML=h;
 }
-function paintTabs(){ var active=['body','history','program','settings'].indexOf(S.tab)>=0?'overview':S.tab; Array.prototype.forEach.call(tabsEl.querySelectorAll('button'),function(b){ b.setAttribute('aria-selected',String(b.dataset.tab===active)); }); }
+function paintTabs(){ var active=['body','history','program','settings','health'].indexOf(S.tab)>=0?'overview':S.tab; Array.prototype.forEach.call(tabsEl.querySelectorAll('button'),function(b){ b.setAttribute('aria-selected',String(b.dataset.tab===active)); }); }
 
 function uiIcon(name){
   var paths={left:'<path d="m14 6-6 6 6 6"/>',right:'<path d="m10 6 6 6-6 6"/>',calendar:'<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16"/>',back:'<path d="m10 5-7 7 7 7M3 12h18"/>'};
@@ -428,7 +451,7 @@ function quickPanel(d){
   var showM=sunday||S.showMeasure||bodyGet(d,'waist')!=null||bodyGet(d,'lower')!=null;
   var f=function(id,field,label,ph,mode,isInt){
     var v=bodyGet(d,field);
-    return '<div class="field"><label for="'+id+'">'+esc(label)+'</label><input class="big" id="'+id+'" data-body="'+field+'"'+(isInt?' data-int="1"':'')+' inputmode="'+(mode||'decimal')+'" autocomplete="off" value="'+esc(isInt?(v==null?'':String(Math.round(v))):fmtN(v))+'" placeholder="'+esc(ph)+'"></div>';
+    return '<div class="field"><label for="'+id+'">'+esc(label)+'</label><input class="big" id="'+id+'" data-body="'+field+'"'+(isInt?' data-int="1"':'')+' inputmode="'+(mode||'decimal')+'" autocomplete="off" value="'+esc(isInt?(v==null?'':String(Math.round(v))):fmtN(v))+'" placeholder="'+esc(ph)+'">'+((field==='sleep'||field==='steps')?'<small class="health-provenance muted" data-health-provenance="'+field+'"'+(healthValue(d,field)==null?' hidden':'')+'>'+esc(healthProvenance(d,field))+'</small>':'')+'</div>';
   };
   var h='<div class="panel"><div class="quick3">'+
     f('in-weight','weights','Вес, кг',fmtN(lastBodyBefore('weights',d)))+
@@ -748,10 +771,94 @@ function renderProgram(){
   return h;
 }
 
+/* ---------- Apple Health import: a separate layer, never manual body data ---------- */
+function healthCandidate(parsed){
+  var previous=S.health[parsed.date]||{},out=Object.assign({},previous,parsed);
+  if(parsed.steps==null&&healthValue(parsed.date,'steps')!=null) out.steps=previous.steps;
+  if(parsed.sleepHours==null&&healthValue(parsed.date,'sleep')!=null){
+    out.sleepHours=previous.sleepHours; out.sleepIntervals=previous.sleepIntervals||[];
+  }
+  return out;
+}
+function healthSame(a,b){
+  var normalized=function(x){
+    if(!x) return null;
+    return {date:x.date,source:x.source,steps:x.steps==null?null:x.steps,sleepHours:x.sleepHours==null?null:x.sleepHours,sleepIntervals:(Array.isArray(x.sleepIntervals)?x.sleepIntervals:[]).map(function(i){return {start:i.start,end:i.end};})};
+  };
+  return JSON.stringify(normalized(a))===JSON.stringify(normalized(b));
+}
+function renderHealthPreview(){
+  var parsed=S.healthPreview;
+  if(!parsed) return '';
+  var candidate=healthCandidate(parsed),empty=parsed.steps==null&&parsed.sleepHours==null;
+  var h='<section class="panel health-preview" aria-labelledby="health-preview-title"><h3 id="health-preview-title">Проверь перед импортом</h3><dl class="health-preview-values">'+
+    '<div><dt>Дата</dt><dd id="health-preview-date">'+esc(fmtDateI.format(parseYmd(parsed.date)))+'</dd></div>'+
+    '<div><dt>Источник</dt><dd id="health-preview-source">'+esc(parsed.source)+'</dd></div>'+
+    '<div><dt>Шаги</dt><dd id="health-preview-steps">'+(candidate.steps==null?'Нет данных':thousands(candidate.steps))+(parsed.steps==null&&candidate.steps!=null?'<small>Сохранится предыдущий импорт</small>':'')+'</dd></div>'+
+    '<div><dt>Сон</dt><dd id="health-preview-sleep">'+(candidate.sleepHours==null?'Нет данных':fmtN(candidate.sleepHours)+' ч')+(parsed.sleepHours==null&&candidate.sleepHours!=null?'<small>Сохранится предыдущий импорт</small>':'')+'</dd></div></dl>';
+  var manual=[];
+  if(bodyManual(parsed.date,'steps')!=null) manual.push('шаги — '+thousands(bodyManual(parsed.date,'steps')));
+  if(bodyManual(parsed.date,'sleep')!=null) manual.push('сон — '+fmtN(bodyManual(parsed.date,'sleep'))+' ч');
+  if(manual.length) h+='<p class="small muted" id="health-manual-warning">Уже внесено вручную: '+esc(manual.join('; '))+'. Ручные значения останутся основными, импорт будет сохранён отдельно.</p>';
+  if(empty) return h+'<p class="small muted mt12" id="health-empty">В этой вставке нет шагов и сна. Ничего не будет изменено.</p></section>';
+  if(healthSame(S.health[parsed.date],candidate)) h+='<p class="small muted mt12" id="health-already-imported">Эти данные уже импортированы. Повтор не создаст записей и не запустит отправку.</p>';
+  return h+'<p class="small muted mt12">Изменится только отдельная запись Apple Health за эту дату.</p><div class="row mt12"><button class="btn" type="button" data-act="health-apply">Импортировать</button></div></section>';
+}
+function paintHealthPreview(){
+  var preview=document.getElementById('health-preview'),error=document.getElementById('health-error');
+  if(preview) preview.innerHTML=renderHealthPreview();
+  if(error){ error.textContent=S.healthError; error.hidden=!S.healthError; }
+}
+function previewHealthText(){
+  S.healthPreview=null; S.healthPreviewText=''; S.healthError='';
+  try{
+    if(!window.SportHealth||typeof window.SportHealth.parse!=='function') throw new Error('Модуль импорта не загрузился. Обнови страницу и попробуй снова.');
+    S.healthPreview=window.SportHealth.parse(S.healthText);
+    S.healthPreviewText=S.healthText;
+  }catch(e){ S.healthError=e.message||'Не получилось прочитать данные. Проверь вставленный текст.'; }
+  paintHealthPreview();
+}
+function applyHealthPreview(){
+  var parsed=S.healthPreview;
+  if(!parsed||S.healthPreviewText!==S.healthText){ S.healthError='Сначала проверь вставленные данные.'; paintHealthPreview(); return; }
+  if(parsed.steps==null&&parsed.sleepHours==null){ S.healthError='В этой вставке нет шагов и сна для импорта.'; paintHealthPreview(); return; }
+  var candidate=healthCandidate(parsed),previous=S.health[parsed.date],same=healthSame(previous,candidate),count=0;
+  if(!same){
+    if(parsed.steps!=null&&(!previous||previous.steps!==candidate.steps)) count++;
+    if(parsed.sleepHours!=null&&(!previous||previous.sleepHours!==candidate.sleepHours||JSON.stringify(previous.sleepIntervals||[])!==JSON.stringify(candidate.sleepIntervals||[]))) count++;
+    var path='health/'+parsed.date+'.json',data=ensureFile(path,{});
+    Object.assign(data,candidate); S.health[parsed.date]=data; touchPath(path);
+  }
+  S.healthNotice={date:parsed.date,text:(same?'Эти данные уже импортированы. Новых показателей: 0.':'Импортировано показателей: '+count+'.')+' Дата: '+fmtLong(parsed.date)+'. Ручные записи сохранены.'};
+  S.healthPreview=null; S.healthPreviewText=''; S.healthError='';
+  navigate('body',parsed.date);
+}
+function readHealthClipboard(){
+  if(!navigator.clipboard||!navigator.clipboard.readText){ S.healthError='Вставь текст вручную в поле выше.'; paintHealthPreview(); return; }
+  var sequence=++S.healthReadSequence;
+  navigator.clipboard.readText().then(function(text){
+    if(S.tab!=='health'||sequence!==S.healthReadSequence) return;
+    S.healthText=text;
+    var input=document.getElementById('health-json'); if(input) input.value=text;
+    previewHealthText();
+  }).catch(function(){
+    if(S.tab==='health'&&sequence===S.healthReadSequence){ S.healthError='Не удалось прочитать буфер. Нажми на поле и выбери «Вставить».'; paintHealthPreview(); }
+  });
+}
+function renderHealth(){
+  return '<button class="back-link" type="button" data-act="navigate" data-tab="settings">'+uiIcon('back')+'Настройки</button>'+
+    '<div class="ses-head"><h2>Сон и шаги из Apple Health</h2></div><p class="small muted" id="health-import-hint">Вставь результат команды на iPhone. Сначала проверь дату и значения, затем нажми «Импортировать».</p>'+
+    '<p><a class="text-button" href="health-setup.html" target="_blank" rel="noopener noreferrer">Как настроить команду на iPhone</a></p>'+
+    '<div class="field"><label for="health-json">Данные из команды</label><textarea id="health-json" rows="8" spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="health-import-hint" placeholder="SPORT_HEALTH_V1…">'+esc(S.healthText)+'</textarea></div>'+
+    '<div class="row"><button class="btn" type="button" data-act="health-preview">Проверить данные</button>'+(navigator.clipboard&&navigator.clipboard.readText?'<button class="text-button" type="button" data-act="health-clipboard">Вставить из буфера</button>':'')+'</div>'+
+    '<p class="small health-import-error" id="health-error" role="alert"'+(S.healthError?'':' hidden')+'>'+esc(S.healthError)+'</p><div id="health-preview">'+renderHealthPreview()+'</div>';
+}
+
 /* ---------- render: settings ---------- */
 function renderSettings(){
   var c=Store.cfg,n=pendingCount();
-  var h='<div class="ses-head"><h2>Настройки</h2><span>Ночной лайм · версия 7</span></div>';
+  var h='<div class="ses-head"><h2>Настройки</h2><span>Ночной лайм · версия 8</span></div>';
+  h+='<div class="panel"><h3>Apple Health</h3><p class="small muted mt8">Импорт сна и шагов из «Здоровья» через команду на iPhone. Ручные значения сохраняют приоритет.</p><div class="row mt8"><button class="btn" type="button" data-act="health-open">Импортировать сон и шаги</button><a class="text-button" href="health-setup.html" target="_blank" rel="noopener noreferrer">Инструкция</a></div></div>';
   h+='<div class="panel"><h3>Копия данных</h3><p class="small muted mt8">Все записи, включая ожидающие синхронизации. Токен доступа в файл не включается.</p><div class="row mt8"><button type="button" class="btn" data-act="download-backup">Скачать копию данных</button><button type="button" class="btn-ghost" data-act="download-upgrade-backup">Копия до обновления</button></div><p class="small muted mt8" id="backup-msg">'+esc(backupError)+'</p></div>';
   if(Store.state==='error'&&Store.err) h+='<div class="banner">'+esc(Store.err)+'</div>';
   h+='<div class="panel form">'+
@@ -775,7 +882,7 @@ function renderSettings(){
     '</ol><p class="small muted mt8">Вставляй токен в приложение, открытое с иконки на экране «Домой». У иконки своё хранилище, отдельное от Safari. Токен хранится только в этом телефоне.</p></div>';
   return h;
 }
-function exportJSON(){ return JSON.stringify({exportedAt:new Date().toISOString(),program:S.program,workouts:S.workouts,body:S.body,food:S.food},null,2); }
+function exportJSON(){ return JSON.stringify({exportedAt:new Date().toISOString(),program:S.program,workouts:S.workouts,body:S.body,food:S.food,health:S.health},null,2); }
 function downloadBackup(before){
   var msg=document.getElementById('backup-msg');
   try{
@@ -799,6 +906,7 @@ function copyData(){
 function render(){
   renderHeader(); paintTabs(); paintSync();
   if(S.tab==='settings'){ view.innerHTML=renderSettings(); return; }
+  if(S.tab==='health'){ view.innerHTML=renderHealth(); return; }
   if(!P()){
     var h;
     if(!hasToken()) h='<div class="empty"><b>Подключи GitHub</b>Программа и записи хранятся в твоём приватном репозитории. Один раз вставь токен, и журнал загрузится.<div class="mt12"><button class="btn" type="button" data-act="open-settings">Открыть настройки</button></div></div>';
@@ -808,6 +916,7 @@ function render(){
   }
   var out='';
   if(['body','history','program'].indexOf(S.tab)>=0) out+='<button type="button" class="back-link" data-act="navigate" data-tab="overview">'+uiIcon('back')+'Обзор</button>';
+  if(S.tab==='body'&&S.healthNotice&&S.healthNotice.date===S.date) out+='<p class="small muted" data-health-notice role="status">'+esc(S.healthNotice.text)+'</p>';
   if(!hasToken()&&pendingCount()) out+='<div class="banner">Записи пока только в этом телефоне. Подключи GitHub в настройках, чтобы они не потерялись.</div>';
   if(S.tab==='overview') out+=renderOverview();
   else if(S.tab==='today') out+=renderToday();
@@ -836,6 +945,10 @@ view.addEventListener('click',function(e){
   if(act==='navigate') navigate(b.dataset.tab,b.dataset.date);
   else if(act==='exercise-history'){ S.exSel=b.dataset.ex; navigate('history'); }
   else if(act==='download-backup'||act==='download-upgrade-backup') downloadBackup(act==='download-upgrade-backup');
+  else if(act==='health-open') navigate('health');
+  else if(act==='health-preview') previewHealthText();
+  else if(act==='health-apply') applyHealthPreview();
+  else if(act==='health-clipboard') readHealthClipboard();
   else if(act==='prev'||act==='next') selectDate(addDays(S.date,act==='prev'?-1:1),act);
   else if(act==='calendar-toggle'){
     if(S.calendarMonth) closeCalendar();
@@ -898,7 +1011,10 @@ view.addEventListener('click',function(e){
 });
 view.addEventListener('input',function(e){
   var t=e.target;
-  if(t.dataset.f){
+  if(t.id==='health-json'){
+    S.healthText=t.value; S.healthPreview=null; S.healthPreviewText=''; S.healthError=''; S.healthReadSequence++;
+    paintHealthPreview();
+  } else if(t.dataset.f){
     var wo=getW(S.date,true),id=t.dataset.ex,i=+t.dataset.i;
     if(t.dataset.slot){ wo.swaps=wo.swaps||{}; wo.swaps[t.dataset.slot]=id; }
     var rows=wo.sets[id]||(wo.sets[id]=[]);
@@ -913,6 +1029,7 @@ view.addEventListener('input',function(e){
     var w3=getW(S.date,true); w3.note=t.value; touchPath('workouts/'+S.date+'.json');
   } else if(t.dataset.body){
     bodySet(S.date,t.dataset.body,t.dataset.int?int(t.value):num(t.value)); touchPath('body/'+S.date.slice(0,7)+'.json');
+    paintHealthProvenance(S.date,t.dataset.body);
   } else if(t.dataset.food){
     var fd=foodDay(S.date,true),m=fd.meals[t.dataset.meal]||(fd.meals[t.dataset.meal]={opt:'other'});
     if(t.dataset.food==='text') m.text=t.value; else m[t.dataset.food]=int(t.value);
@@ -925,7 +1042,16 @@ view.addEventListener('input',function(e){
   }
 });
 view.addEventListener('change',function(e){ if(e.target.id==='ex-select'){ S.exSel=e.target.value; render(); } });
-view.addEventListener('focusout',function(e){ if(e.target.matches&&e.target.matches('input,textarea')) persist(); });
+view.addEventListener('focusout',function(e){
+  var t=e.target;
+  if(t.matches&&t.matches('input,textarea')){
+    if(t.dataset.body&&bodyManual(S.date,t.dataset.body)==null&&healthValue(S.date,t.dataset.body)!=null){
+      var v=healthValue(S.date,t.dataset.body); t.value=t.dataset.int?String(Math.round(v)):fmtN(v);
+      paintHealthProvenance(S.date,t.dataset.body);
+    }
+    persist();
+  }
+});
 view.addEventListener('keydown',function(e){
   if(calendarKey(e)) return;
   if(e.key!=='Enter'||!e.target.classList||!e.target.classList.contains('cell')) return;

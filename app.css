@@ -345,4 +345,12 @@ select{background:var(--bg)}
 .overview-link>span:last-child{font-size:12px;color:var(--accent);flex-shrink:0}
 .overview-link small{display:block;color:var(--muted);font-size:12px;margin-top:3px}
 .back-link{display:flex;align-items:center;gap:8px;justify-self:start;min-height:44px;border:0;background:none;color:var(--accent);padding:0;font-size:14px}
+.health-provenance{font-size:11px;line-height:1.4;overflow-wrap:anywhere}
+.health-preview-values{margin:14px 0;display:grid;gap:12px}
+.health-preview-values>div{display:grid;grid-template-columns:68px minmax(0,1fr);gap:12px}
+.health-preview-values dt{font-size:13px;color:var(--muted)}
+.health-preview-values dd{margin:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.health-preview-values dd small{display:block;font-size:12px;color:var(--muted);margin-top:4px}
+.health-import-error{color:var(--bad)}
+#health-json{overflow-wrap:anywhere}
 @media(max-width:360px){.wrap{padding-inline:16px}.top-in{padding-inline:16px}.top-side{max-width:50%}.calendar{margin-inline:-16px}.datebar .d b{font-size:15px}.overview-title h2{font-size:29px}.result-row{gap:10px}.result-value{font-size:15px}}

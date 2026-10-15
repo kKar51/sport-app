@@ -323,6 +323,7 @@ async function main() {
         await page.locator('#gear').click();
         await page.locator('#gear').click();
         const beforeRaw = await page.evaluate(key => localStorage.getItem(key), STORE_KEY);
+        const beforeBackup = await backupRaw(page) || beforeRaw;
         servePrevious = false;
         await page.evaluate(async () => {
           const changed = new Promise((resolve, reject) => {
@@ -334,17 +335,18 @@ async function main() {
         });
         ok((await page.evaluate(() => caches.keys())).includes(newCache), `New worker ${newCache} replaced the previous worker`);
         await page.reload();
-        equal(await backupRaw(page), beforeRaw, 'SW upgrade backs up the old dirty store before restore');
+        equal(await backupRaw(page), beforeBackup, 'SW upgrade preserves an existing backup or backs up the old dirty store');
         let saved = await store(page);
         equal(saved.files, seed.files, 'SW update preserves every legacy field');
         equal(saved.pending, seed.pending, 'SW update preserves unsent records');
         await context.setOffline(true);
         await page.reload({ waitUntil: 'domcontentloaded' });
+        equal(await page.evaluate(() => typeof window.SportHealth.parse), 'function', 'Health parser is available after an offline upgrade');
         await navigate(page, 'food');
         saved = await store(page);
         equal(saved.files, seed.files, 'Offline reopening after SW update preserves every legacy field');
         equal(saved.pending, seed.pending, 'Offline reopening after SW update preserves dirty flags');
-        equal(await backupRaw(page), beforeRaw, 'Offline reopening leaves the upgrade snapshot unchanged');
+        equal(await backupRaw(page), beforeBackup, 'Offline reopening leaves the upgrade snapshot unchanged');
         equal(mock.requests.filter(r => r.method === 'PUT').length, 0, 'SW test sends no data to any remote API');
         await context.close();
       }
