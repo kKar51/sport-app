@@ -49,7 +49,7 @@ function backupBeforeUpgrade(){
   catch(e){ backupError='Не удалось создать дополнительную копию на телефоне. Скачай копию данных в настройках.'; }
 }
 var DEFAULT_CFG={owner:'kKar51',repo:'sport',branch:'main',token:''};
-var DATA_RE=/^(program\.json|workouts\/\d{4}-\d{2}-\d{2}\.json|body\/\d{4}-\d{2}\.json|food\/\d{4}-\d{2}\.json|health\/\d{4}-\d{2}-\d{2}\.json)$/;
+var DATA_RE=/^(program\.json|workouts\/\d{4}-\d{2}-\d{2}\.json|body\/\d{4}-\d{2}\.json|food\/\d{4}-\d{2}\.json|health\/\d{4}-\d{2}-\d{2}\.json|health\/auto\/\d{4}-\d{2}-\d{2}\.txt)$/;
 var Store={cfg:Object.assign({},DEFAULT_CFG),files:{},pending:{},dailyDrafts:{},lastSync:0,lastPull:0,state:'idle',err:'',q:Promise.resolve(),timer:null,persistTimer:null,localErr:''};
 
 function persist(){
@@ -182,7 +182,8 @@ async function pull(){
     var b=await gh('GET',repoBase()+'/git/blobs/'+sha);
     if(!b.ok) throw httpErr(b);
     var bj=await b.json(),data;
-    try{ data=JSON.parse(b64dec(bj.content)); }catch(e){ continue; }
+    // The iPhone shortcut uploads its plain SPORT_HEALTH_V1 text; the journal only reads it.
+    try{ data=/\.txt$/.test(p)?{format:'sport-health.auto.text',text:b64dec(bj.content)}:JSON.parse(b64dec(bj.content)); }catch(e){ continue; }
     // An input event may have changed this file while the blob was downloading.
     if(Store.pending[p]||Store.files[p]!==f) continue;
     Store.files[p]={sha:sha,data:data};
@@ -193,17 +194,18 @@ async function pull(){
 }
 
 /* ---------- app state ---------- */
-var S={program:null,workouts:{},body:{},food:{},health:{},tab:'overview',date:todayStr(),exSel:null,showMeasure:false,swapOpen:null,calendarMonth:null,returnTab:'overview',healthText:'',healthPreview:null,healthPreviewText:'',healthError:'',healthNotice:null,healthReadSequence:0,dailyMessage:{},progress:{kind:'weights',period:30,returnTab:'overview',returnDate:todayStr(),selected:null},strengthPeriod:30,strengthSelected:null};
+var S={program:null,workouts:{},body:{},food:{},health:{},tab:'overview',date:todayStr(),exSel:null,showMeasure:false,swapOpen:null,calendarMonth:null,returnTab:'overview',healthText:'',healthPreview:null,healthPreviewText:'',healthError:'',healthNotice:null,healthReadSequence:0,healthAuto:{},dailyMessage:{},progress:{kind:'weights',period:30,returnTab:'overview',returnDate:todayStr(),selected:null},strengthPeriod:30,strengthSelected:null};
 var TYPES=[['A','Верх A'],['L','Ноги'],['B','Верх B'],['run','Бег'],['rest','Отдых']];
 
 function rebuild(){
-  S.program=null; S.workouts={}; S.body={}; S.food={}; S.health={};
+  S.program=null; S.workouts={}; S.body={}; S.food={}; S.health={}; S.healthAuto={};
   Object.keys(Store.files).forEach(function(p){
     var d=Store.files[p].data;
     if(p==='program.json') S.program=d;
     else if(p.indexOf('workouts/')===0) S.workouts[p.slice(9,-5)]=d;
     else if(p.indexOf('body/')===0) S.body[p.slice(5,-5)]=d;
     else if(p.indexOf('food/')===0) S.food[p.slice(5,-5)]=d;
+    else if(p.indexOf('health/auto/')===0) S.healthAuto[p.slice(12,-4)]=autoHealth(d,p.slice(12,-4));
     else if(p.indexOf('health/')===0) S.health[p.slice(7,-5)]=d;
   });
 }
@@ -296,11 +298,22 @@ function getW(d,create){
   return w;
 }
 function bodyManual(d,f){ var m=S.body[d.slice(0,7)]; return m&&m[f]&&typeof m[f][d]==='number'?m[f][d]:null; }
-function healthValue(d,f){
-  var h=S.health[d],key=f==='steps'?'steps':f==='sleep'?'sleepHours':null;
-  var v=key&&h&&h.format==='sport-health.day.v1'?h[key]:null;
-  return typeof v==='number'&&isFinite(v)&&v>=0?v:null;
+// An automatic upload that fails validation is ignored, exactly like an import that was never confirmed.
+function autoHealth(d,date){
+  if(!d||typeof d.text!=='string'||!window.SportHealth) return null;
+  try{ var h=window.SportHealth.parse(d.text); }catch(e){ return null; }
+  if(h.date!==date) return null;
+  h.source=(h.source||'Apple Health')+' · автоматически'; delete h.receivedAt;
+  return h;
 }
+function healthNumber(h,key){ var v=h&&h.format==='sport-health.day.v1'?h[key]:null; return typeof v==='number'&&isFinite(v)&&v>=0?v:null; }
+// A confirmed import keeps priority over the automatic upload for the same day.
+function healthRecord(d,f){
+  var key=f==='steps'?'steps':f==='sleep'?'sleepHours':f;
+  if(healthNumber(S.health[d],key)!=null) return S.health[d];
+  return healthNumber(S.healthAuto[d],key)!=null?S.healthAuto[d]:null;
+}
+function healthValue(d,f){ var h=healthRecord(d,f); return h?healthNumber(h,f==='steps'?'steps':f==='sleep'?'sleepHours':f):null; }
 function bodyGet(d,f){ var manual=bodyManual(d,f); return manual!=null?manual:healthValue(d,f); }
 function bodySet(d,f,v){
   var key=d.slice(0,7);
@@ -310,13 +323,13 @@ function bodySet(d,f,v){
 function bodySeries(f){
   var dates={};
   Object.keys(S.body).forEach(function(k){ var o=S.body[k][f]||{}; Object.keys(o).forEach(function(d){ if(typeof o[d]==='number') dates[d]=1; }); });
-  if(f==='steps'||f==='sleep') Object.keys(S.health).forEach(function(d){ if(healthValue(d,f)!=null) dates[d]=1; });
+  if(f==='steps'||f==='sleep') Object.keys(S.health).concat(Object.keys(S.healthAuto)).forEach(function(d){ if(healthValue(d,f)!=null) dates[d]=1; });
   return Object.keys(dates).sort().map(function(d){ return [d,bodyGet(d,f)]; });
 }
 function healthProvenance(d,f){
   if(healthValue(d,f)==null) return '';
-  var h=S.health[d],source=h.source||'Apple Health',received=Date.parse(h.receivedAt);
-  if(bodyManual(d,f)!=null) return 'Вручную · импорт '+source+' сохранён отдельно';
+  var h=healthRecord(d,f),source=h.source||'Apple Health',received=Date.parse(h.receivedAt);
+  if(bodyManual(d,f)!=null) return 'Вручную · данные часов сохранены отдельно';
   return source+(isFinite(received)?' · обновлено '+fmtWhen(received):'');
 }
 function paintHealthProvenance(d,f){
@@ -402,6 +415,8 @@ function renderDailyPanel(){
   h+='<div class="daily-row"><div>'+metricButton('sleep','Сон')+'</div><div class="daily-value daily-sleep"><input id="in-sleep-hours" data-body-draft="sleepHours" inputmode="numeric" autocomplete="off" placeholder="—" aria-label="Часы сна" value="'+esc(dailyValue(d,'sleepHours'))+'"><span>ч</span><input id="in-sleep-minutes" data-body-draft="sleepMinutes" inputmode="numeric" autocomplete="off" placeholder="—" aria-label="Минуты сна" value="'+esc(dailyValue(d,'sleepMinutes'))+'"><span>мин</span></div></div>'+
     field('in-steps','steps','steps','Шаги','','numeric');
   ['sleep','steps'].forEach(function(f){ var source=healthProvenance(d,f); if(source) h+='<p class="daily-previous">'+esc((f==='sleep'?'Сон: ':'Шаги: ')+source)+'</p>'; });
+  var kcal=healthValue(d,'activeKcal'),exercise=healthValue(d,'exerciseMin');
+  if(kcal!=null||exercise!=null) h+='<p class="daily-previous" id="daily-activity">Часы: '+esc([kcal!=null?'активные '+thousands(kcal)+' ккал':'',exercise!=null?'упражнения '+exercise+' мин':''].filter(Boolean).join(' · '))+'</p>';
   if(show) h+='<div class="daily-measures">'+field('in-waist','waist','waist','Талия','см')+field('in-lower','lower','lower','Низ живота','см')+'</div>';
   else h+='<button type="button" class="text-button" data-act="show-measure">'+(bodyGet(d,'waist')!=null||bodyGet(d,'lower')!=null?'Изменить замеры тела':'+ Добавить замеры тела')+'</button>';
   var relative=d===todayStr()?'сегодня':d===addDays(todayStr(),-1)?'вчера':fmtShort(d);
@@ -766,7 +781,7 @@ function renderBody(){
 /* ---------- render: history ---------- */
 var PROGRESS_INFO={weights:{name:'Вес',unit:'кг'},waist:{name:'Талия',unit:'см'},lower:{name:'Низ живота',unit:'см'},steps:{name:'Шаги',unit:'шагов'},sleep:{name:'Сон',unit:'ч'}};
 function progressWidth(){ var cs=getComputedStyle(view); return Math.max(240,Math.round(view.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight))); }
-function progressSource(d,kind){ if(bodyManual(d,kind)!=null) return 'Вручную'; var h=S.health[d]; return h&&h.source?h.source:'Apple Health'; }
+function progressSource(d,kind){ if(bodyManual(d,kind)!=null) return 'Вручную'; var h=healthRecord(d,kind); return h&&h.source?h.source:'Apple Health'; }
 function progressTargets(){
   var p=P()||{},stepsText=String(p.stepsTarget||''),stepMatch=stepsText.replace(/\s/g,'').match(/\d+(?:[.,]\d+)?/),step=stepMatch?Number(stepMatch[0].replace(',','.')):null;
   if(step!=null&&/тыс|thousand|\bk\b/i.test(stepsText)) step*=1000;
@@ -925,28 +940,30 @@ function renderProgram(){
 /* ---------- Apple Health import: a separate layer, never manual body data ---------- */
 function healthCandidate(parsed){
   var previous=S.health[parsed.date]||{},out=Object.assign({},previous,parsed);
-  if(parsed.steps==null&&healthValue(parsed.date,'steps')!=null) out.steps=previous.steps;
-  if(parsed.sleepHours==null&&healthValue(parsed.date,'sleep')!=null){
+  if(parsed.steps==null&&healthNumber(previous,'steps')!=null) out.steps=previous.steps;
+  if(parsed.sleepHours==null&&healthNumber(previous,'sleepHours')!=null){
     out.sleepHours=previous.sleepHours; out.sleepIntervals=previous.sleepIntervals||[];
   }
+  ['activeKcal','exerciseMin'].forEach(function(k){ if(parsed[k]==null&&healthNumber(previous,k)!=null) out[k]=previous[k]; });
   return out;
 }
 function healthSame(a,b){
   var normalized=function(x){
     if(!x) return null;
-    return {date:x.date,source:x.source,steps:x.steps==null?null:x.steps,sleepHours:x.sleepHours==null?null:x.sleepHours,sleepIntervals:(Array.isArray(x.sleepIntervals)?x.sleepIntervals:[]).map(function(i){return {start:i.start,end:i.end};})};
+    return {date:x.date,source:x.source,steps:x.steps==null?null:x.steps,activeKcal:x.activeKcal==null?null:x.activeKcal,exerciseMin:x.exerciseMin==null?null:x.exerciseMin,sleepHours:x.sleepHours==null?null:x.sleepHours,sleepIntervals:(Array.isArray(x.sleepIntervals)?x.sleepIntervals:[]).map(function(i){return {start:i.start,end:i.end};})};
   };
   return JSON.stringify(normalized(a))===JSON.stringify(normalized(b));
 }
 function renderHealthPreview(){
   var parsed=S.healthPreview;
   if(!parsed) return '';
-  var candidate=healthCandidate(parsed),empty=parsed.steps==null&&parsed.sleepHours==null;
+  var candidate=healthCandidate(parsed),empty=parsed.steps==null&&parsed.sleepHours==null&&parsed.activeKcal==null&&parsed.exerciseMin==null;
   var h='<section class="panel health-preview" aria-labelledby="health-preview-title"><h3 id="health-preview-title">Проверь перед импортом</h3><dl class="health-preview-values">'+
     '<div><dt>Дата</dt><dd id="health-preview-date">'+esc(fmtDateI.format(parseYmd(parsed.date)))+'</dd></div>'+
     '<div><dt>Источник</dt><dd id="health-preview-source">'+esc(parsed.source)+'</dd></div>'+
     '<div><dt>Шаги</dt><dd id="health-preview-steps">'+(candidate.steps==null?'Нет данных':thousands(candidate.steps))+(parsed.steps==null&&candidate.steps!=null?'<small>Сохранится предыдущий импорт</small>':'')+'</dd></div>'+
-    '<div><dt>Сон</dt><dd id="health-preview-sleep">'+(candidate.sleepHours==null?'Нет данных':fmtN(candidate.sleepHours)+' ч')+(parsed.sleepHours==null&&candidate.sleepHours!=null?'<small>Сохранится предыдущий импорт</small>':'')+'</dd></div></dl>';
+    '<div><dt>Сон</dt><dd id="health-preview-sleep">'+(candidate.sleepHours==null?'Нет данных':fmtN(candidate.sleepHours)+' ч')+(parsed.sleepHours==null&&candidate.sleepHours!=null?'<small>Сохранится предыдущий импорт</small>':'')+'</dd></div>'+
+    '<div><dt>Активность</dt><dd id="health-preview-activity">'+(candidate.activeKcal==null&&candidate.exerciseMin==null?'Нет данных':[candidate.activeKcal!=null?thousands(candidate.activeKcal)+' ккал':'',candidate.exerciseMin!=null?candidate.exerciseMin+' мин':''].filter(Boolean).join(' · '))+'</dd></div></dl>';
   var manual=[];
   if(bodyManual(parsed.date,'steps')!=null) manual.push('шаги — '+thousands(bodyManual(parsed.date,'steps')));
   if(bodyManual(parsed.date,'sleep')!=null) manual.push('сон — '+fmtN(bodyManual(parsed.date,'sleep'))+' ч');
@@ -972,11 +989,12 @@ function previewHealthText(){
 function applyHealthPreview(){
   var parsed=S.healthPreview;
   if(!parsed||S.healthPreviewText!==S.healthText){ S.healthError='Сначала проверь вставленные данные.'; paintHealthPreview(); return; }
-  if(parsed.steps==null&&parsed.sleepHours==null){ S.healthError='В этой вставке нет шагов и сна для импорта.'; paintHealthPreview(); return; }
+  if(parsed.steps==null&&parsed.sleepHours==null&&parsed.activeKcal==null&&parsed.exerciseMin==null){ S.healthError='В этой вставке нет шагов, сна и активности для импорта.'; paintHealthPreview(); return; }
   var candidate=healthCandidate(parsed),previous=S.health[parsed.date],same=healthSame(previous,candidate),count=0;
   if(!same){
     if(parsed.steps!=null&&(!previous||previous.steps!==candidate.steps)) count++;
     if(parsed.sleepHours!=null&&(!previous||previous.sleepHours!==candidate.sleepHours||JSON.stringify(previous.sleepIntervals||[])!==JSON.stringify(candidate.sleepIntervals||[]))) count++;
+    ['activeKcal','exerciseMin'].forEach(function(k){ if(parsed[k]!=null&&(!previous||previous[k]!==candidate[k])) count++; });
     var path='health/'+parsed.date+'.json',data=ensureFile(path,{});
     Object.assign(data,candidate); S.health[parsed.date]=data; touchPath(path);
   }
@@ -1008,7 +1026,7 @@ function renderHealth(){
 /* ---------- render: settings ---------- */
 function renderSettings(){
   var c=Store.cfg,n=pendingCount();
-  var h='<div class="ses-head"><h2>Настройки</h2><span>Ночной лайм · версия 9</span></div>';
+  var h='<div class="ses-head"><h2>Настройки</h2><span>Ночной лайм · версия 10</span></div>';
   h+='<div class="panel"><h3>Apple Health</h3><p class="small muted mt8">Импорт сна и шагов из «Здоровья» через команду на iPhone. Ручные значения сохраняют приоритет.</p><div class="row mt8"><button class="btn" type="button" data-act="health-open">Импортировать сон и шаги</button><a class="text-button" href="health-setup.html" target="_blank" rel="noopener noreferrer">Инструкция</a></div></div>';
   h+='<div class="panel"><h3>Копия данных</h3><p class="small muted mt8">Все записи, включая ожидающие синхронизации. Токен доступа в файл не включается.</p><div class="row mt8"><button type="button" class="btn" data-act="download-backup">Скачать копию данных</button><button type="button" class="btn-ghost" data-act="download-upgrade-backup">Копия до обновления</button></div><p class="small muted mt8" id="backup-msg">'+esc(backupError)+'</p></div>';
   if(Store.state==='error'&&Store.err) h+='<div class="banner">'+esc(Store.err)+'</div>';

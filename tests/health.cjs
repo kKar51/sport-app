@@ -27,10 +27,15 @@ equal(parse({...base,date:'2024-02-29',sleep:[]}).date,'2024-02-29','Valid leap 
 const plain='SPORT_HEALTH_V1\ndate=2026-10-14\nsource=Apple Health\nsteps=8500\nsleep:\n2026-10-13T23:00:00+03:00|2026-10-14T07:30:00+03:00|Спит';
 equal(Health.parse(plain).sleepHours,8.5,'Shortcut text format works');
 equal(Health.parse(plain.replace('steps=8500','steps=')).steps,null,'Empty step field stays unknown');
+const activity=plain.replace('steps=8500','steps=8500\nactiveKcal=612,4\nexerciseMin=47');
+equal([Health.parse(activity).activeKcal,Health.parse(activity).exerciseMin],[612,47],'Active energy and exercise minutes are read and rounded');
+equal([Health.parse(plain).activeKcal,Health.parse(plain).exerciseMin],[null,null],'Older shortcut text without activity stays unknown');
+equal(Health.parse(activity.replace('activeKcal=612,4','activeKcal=')).activeKcal,null,'Empty active energy is unknown, not zero');
+equal(parse({...base,steps:null,sleep:[],activeKcal:300}).activeKcal,300,'A day with only activity is accepted');
 for(const [input,label] of [
   [{...base,date:'2025-02-29'},'Invalid calendar day'],[{...base,date:'2099-01-01'},'Future date'],
   [{...base,steps:true},'Boolean steps'],[{...base,steps:[]},'Array is not zero steps'],[{...base,steps:-1},'Negative steps'],[{...base,steps:2.5},'Fractional steps'],
-  [{...base,steps:'8500 шагов'},'Unconverted quantity'],[{...base,steps:null,sleep:[]},'No readings'],
+  [{...base,steps:'8500 шагов'},'Unconverted quantity'],[{...base,activeKcal:'600 ккал'},'Active energy with unit'],[{...base,exerciseMin:2000},'Exercise minutes beyond a day'],[{...base,steps:null,sleep:[]},'No readings'],
   [{...base,sleep:[{...base.sleep[2],state:'Unrecognized'}]},'Unknown sleep state'],
   [{...base,sleep:[{...base.sleep[2],start:'2026-10-13T23:00:00'}]},'Timezone required'],
   [{...base,sleep:[{...base.sleep[2],end:'2026-10-13T22:00:00+03:00'}]},'Reversed interval']
@@ -87,22 +92,43 @@ const server=http.createServer((req,res)=>{const name=path.resolve(root,'.'+deco
   // A second device receives the separate Health file through the existing GitHub pull.
   const remoteSeed=JSON.parse(JSON.stringify(seed));remoteSeed.cfg={owner:'synthetic',repo:'synthetic',branch:'main',token:'synthetic-not-a-real-token'};remoteSeed.pending={};
   const remoteRecord=parse({...base,date:'2026-10-12',steps:7777,sleep:[]});
+  // The iPhone automation uploads raw shortcut text; the journal only reads it.
+  const autoText=(date,steps,extra)=>`SPORT_HEALTH_V1\ndate=${date}\nsource=Apple Health\nsteps=${steps}\n${extra||''}sleep:\n`;
+  const autoFiles={'health/auto/2026-10-11.txt':autoText('2026-10-11',6543,'activeKcal=612\nexerciseMin=47\n'),'health/auto/2026-10-12.txt':autoText('2026-10-12',1111),'health/auto/2026-10-10.txt':autoText('2026-10-09',2222)};
   const remotePath='health/2026-10-12.json',remoteContext=await browser.newContext({viewport:{width:390,height:844},timezoneId:'Europe/Moscow',serviceWorkers:'block'});
   await remoteContext.addInitScript(({key,seed})=>localStorage.setItem(key,JSON.stringify(seed)),{key,seed:remoteSeed});
   let puts=0;await remoteContext.route('**/*',route=>{
     const req=route.request(),u=new URL(req.url());if(req.url().startsWith(url))return route.continue();
     if(u.host!=='api.github.com')return route.abort();
     if(req.method()!=='GET'){puts++;return route.fulfill({status:500,body:'Unexpected write'});}
-    if(u.pathname.endsWith('/git/trees/main'))return route.fulfill({json:{tree:[...Object.keys(remoteSeed.files).map(p=>({path:p,type:'blob',sha:remoteSeed.files[p].sha})),{path:remotePath,type:'blob',sha:'remote-health'}]}});
+    if(u.pathname.endsWith('/git/trees/main'))return route.fulfill({json:{tree:[...Object.keys(remoteSeed.files).map(p=>({path:p,type:'blob',sha:remoteSeed.files[p].sha})),{path:remotePath,type:'blob',sha:'remote-health'},...Object.keys(autoFiles).map(p=>({path:p,type:'blob',sha:'auto-'+p.slice(12,22)}))]}});
     if(u.pathname.endsWith('/git/blobs/remote-health'))return route.fulfill({json:{content:Buffer.from(text(remoteRecord)).toString('base64')}});
+    const autoPath=Object.keys(autoFiles).find(p=>u.pathname.endsWith('/git/blobs/auto-'+p.slice(12,22)));
+    if(autoPath)return route.fulfill({json:{content:Buffer.from(autoFiles[autoPath]).toString('base64')}});
     return route.fulfill({status:404,json:{message:'Not found'}});
   });
   const remotePage=await remoteContext.newPage();await remotePage.clock.install({time:new Date('2026-10-15T12:00:00+03:00')});await remotePage.goto(url);
-  await remotePage.waitForFunction(({key,p})=>!!JSON.parse(localStorage.getItem(key)).files[p],{key,p:remotePath});
+  // Poll with evaluate: waitForFunction falls back to eval, which the journal's CSP forbids.
+  const waitFile=async p=>{for(let i=0;i<100;i++){if(await remotePage.evaluate(({key,p})=>!!JSON.parse(localStorage.getItem(key)).files[p],{key,p}))return;await remotePage.waitForTimeout(100);}throw new Error('File not pulled: '+p);};
+  await waitFile(remotePath);
   const received=await remotePage.evaluate(key=>JSON.parse(localStorage.getItem(key)),key);
   equal(received.files[remotePath].data,remoteRecord,'GitHub pull recognizes the new Health path');
   equal(received.files['body/2026-10.json'],remoteSeed.files['body/2026-10.json'],'Pulling Health leaves manual body records untouched');
+  await waitFile('health/auto/2026-10-11.txt');
+  // Read the result the way the user sees it: overview of each day, stepping back from 15 October.
+  const day=async back=>{await remotePage.locator('#tabs [data-tab=overview]').click();for(let k=0;k<back;k++)await remotePage.locator('[data-act=prev]').first().click();
+    const activity=remotePage.locator('#daily-activity');
+    return {steps:(await remotePage.locator('#in-steps').inputValue()).replace(/\D/g,''),text:await remotePage.locator('.daily-entry').innerText(),activity:await activity.count()?await activity.innerText():''};};
+  let shown=await day(4);
+  equal(shown.steps,'6543','Automatic upload fills steps for its day');
+  ok(shown.activity.includes('612')&&shown.activity.includes('47 мин'),'Overview shows watch activity for the day');
+  ok(shown.text.includes('автоматически'),'Automatic source is labelled');
+  await remotePage.reload();shown=await day(3);
+  equal(shown.steps,'7777','Confirmed import keeps priority over the automatic upload');
+  await remotePage.reload();shown=await day(5);
+  equal([shown.steps,shown.activity],['',''],'An automatic file whose date does not match its name is ignored');
+  equal(Object.keys((await remotePage.evaluate(key=>JSON.parse(localStorage.getItem(key)),key)).pending),[],'Automatic files never become pending writes');
   equal(puts,0,'Reading remote Health does not queue a write');await remoteContext.close();
-  console.log(`PASS: ${checks} Health checks: sleep interval union, missing values, validation, manual priority, duplicates, partial imports, persistence, mobile layout.`);
+  console.log(`PASS: ${checks} Health checks: sleep interval union, missing values, validation, manual priority, duplicates, partial imports, activity, automatic uploads, persistence, mobile layout.`);
   console.log('NOT_RUN: creating/running the shortcut and iOS clipboard permissions on a physical iPhone.');
 }finally{await browser.close();server.close();}})().catch(e=>{console.error(e);process.exitCode=1;server.close();});
