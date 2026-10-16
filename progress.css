@@ -1,0 +1,19 @@
+/* The chart follows the journal palette and stays legible at phone widths. */
+.progress-chart{display:block;width:100%;max-width:100%;height:auto;overflow:visible;touch-action:manipulation}
+.progress-chart text{font-family:var(--body,system-ui,sans-serif);font-variant-numeric:tabular-nums}
+.progress-grid{stroke:var(--line,#394451);stroke-width:1;vector-effect:non-scaling-stroke}
+.progress-y-label,.progress-x-label{fill:var(--muted,#a7b6c3);font-size:11.5px}
+.progress-observed{fill:var(--muted,#a7b6c3)}
+.progress-raw-line{fill:none;stroke:var(--muted,#a7b6c3);stroke-width:1;stroke-opacity:.65;vector-effect:non-scaling-stroke}
+.progress-point{stroke:var(--bg,#19212c);stroke-width:1.5;vector-effect:non-scaling-stroke}
+.progress-average{fill:none;stroke:var(--accent,#c8ef80);stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.progress-average-point{fill:var(--accent,#c8ef80)}
+.progress-bar{fill:var(--accent,#c8ef80);fill-opacity:.7}
+.progress-partial{fill:var(--bg,#19212c);fill-opacity:1;stroke:var(--accent,#c8ef80);stroke-width:1.5;stroke-dasharray:3 2;vector-effect:non-scaling-stroke}
+.progress-goal-line{fill:none;stroke:var(--accent,#c8ef80);stroke-opacity:.75;stroke-width:1;stroke-dasharray:5 4;vector-effect:non-scaling-stroke}
+.progress-goal-band{fill:var(--accent,#c8ef80);fill-opacity:.1}
+.progress-selected-guide{stroke:var(--muted,#a7b6c3);stroke-width:1;stroke-dasharray:3 4;vector-effect:non-scaling-stroke}
+.progress-selected{fill:var(--accent,#c8ef80);fill-opacity:1;stroke:var(--ink,#f4f7f0);stroke-width:2;vector-effect:non-scaling-stroke}
+.progress-empty{fill:var(--ink,#f4f7f0);font-size:16px;font-weight:600}
+.progress-empty-sub{fill:var(--muted,#a7b6c3);font-size:12px}
+@media (prefers-reduced-motion:no-preference){.progress-selected{transition:fill-opacity .12s ease}}

@@ -42,18 +42,19 @@ function plural(n,a,b,c){ var m10=n%10,m100=n%100; if(m10===1&&m100!==11) return
 /* ---------- local store + GitHub sync ---------- */
 var LS_KEY='sport-journal.v1';
 var UPGRADE_BACKUP_KEY='sport-journal.backup.before-night-v1';
+var DAILY_BACKUP_KEY='sport-journal.backup.before-daily-v1';
 var backupError='';
 function backupBeforeUpgrade(){
-  try{ var raw=localStorage.getItem(LS_KEY); if(raw&&!localStorage.getItem(UPGRADE_BACKUP_KEY)) localStorage.setItem(UPGRADE_BACKUP_KEY,raw); }
+  try{ var raw=localStorage.getItem(LS_KEY); if(raw&&!localStorage.getItem(UPGRADE_BACKUP_KEY)) localStorage.setItem(UPGRADE_BACKUP_KEY,raw);if(raw&&!localStorage.getItem(DAILY_BACKUP_KEY))localStorage.setItem(DAILY_BACKUP_KEY,raw); }
   catch(e){ backupError='Не удалось создать дополнительную копию на телефоне. Скачай копию данных в настройках.'; }
 }
 var DEFAULT_CFG={owner:'kKar51',repo:'sport',branch:'main',token:''};
 var DATA_RE=/^(program\.json|workouts\/\d{4}-\d{2}-\d{2}\.json|body\/\d{4}-\d{2}\.json|food\/\d{4}-\d{2}\.json|health\/\d{4}-\d{2}-\d{2}\.json)$/;
-var Store={cfg:Object.assign({},DEFAULT_CFG),files:{},pending:{},lastSync:0,lastPull:0,state:'idle',err:'',q:Promise.resolve(),timer:null,persistTimer:null,localErr:''};
+var Store={cfg:Object.assign({},DEFAULT_CFG),files:{},pending:{},dailyDrafts:{},lastSync:0,lastPull:0,state:'idle',err:'',q:Promise.resolve(),timer:null,persistTimer:null,localErr:''};
 
 function persist(){
   clearTimeout(Store.persistTimer);
-  try{ localStorage.setItem(LS_KEY,JSON.stringify({cfg:Store.cfg,files:Store.files,pending:Store.pending,lastSync:Store.lastSync})); Store.localErr=''; }
+  try{ var snapshot={cfg:Store.cfg,files:Store.files,pending:Store.pending,lastSync:Store.lastSync}; if(Object.keys(Store.dailyDrafts).length) snapshot.dailyDrafts=Store.dailyDrafts; localStorage.setItem(LS_KEY,JSON.stringify(snapshot)); Store.localErr=''; }
   catch(e){ Store.localErr='Телефон не дал сохранить записи локально'; }
 }
 function persistSoon(){ clearTimeout(Store.persistTimer); Store.persistTimer=setTimeout(persist,250); }
@@ -63,6 +64,7 @@ function restore(){
     var o=JSON.parse(raw);
     Store.cfg=Object.assign({},DEFAULT_CFG,o.cfg||{});
     Store.files=o.files||{}; Store.pending=o.pending||{}; Store.lastSync=o.lastSync||0;
+    Store.dailyDrafts=o.dailyDrafts&&typeof o.dailyDrafts==='object'&&!Array.isArray(o.dailyDrafts)?o.dailyDrafts:{};
   }catch(e){}
 }
 function pendingCount(){ return Object.keys(Store.pending).length; }
@@ -191,7 +193,7 @@ async function pull(){
 }
 
 /* ---------- app state ---------- */
-var S={program:null,workouts:{},body:{},food:{},health:{},tab:'overview',date:todayStr(),exSel:null,showMeasure:false,swapOpen:null,calendarMonth:null,returnTab:'overview',healthText:'',healthPreview:null,healthPreviewText:'',healthError:'',healthNotice:null,healthReadSequence:0};
+var S={program:null,workouts:{},body:{},food:{},health:{},tab:'overview',date:todayStr(),exSel:null,showMeasure:false,swapOpen:null,calendarMonth:null,returnTab:'overview',healthText:'',healthPreview:null,healthPreviewText:'',healthError:'',healthNotice:null,healthReadSequence:0,dailyMessage:{},progress:{kind:'weights',period:30,returnTab:'overview',returnDate:todayStr(),selected:null},strengthPeriod:30,strengthSelected:null};
 var TYPES=[['A','Верх A'],['L','Ноги'],['B','Верх B'],['run','Бег'],['rest','Отдых']];
 
 function rebuild(){
@@ -332,6 +334,80 @@ function foodDay(d,create){
 }
 function touchFood(d){ touchPath('food/'+d.slice(0,7)+'.json'); }
 function lastBodyBefore(f,d){ var s=bodySeries(f).filter(function(p){ return p[0]<d; }); return s.length?s[s.length-1][1]:null; }
+/* The daily form keeps an independent local draft until explicit Save. */
+function sleepParts(d){ var v=bodyGet(d,'sleep'); if(v==null) return {sleepHours:'',sleepMinutes:''}; var minutes=Math.round(v*60); return {sleepHours:String(Math.floor(minutes/60)),sleepMinutes:String(minutes%60)}; }
+function dailyValue(d,f){
+  var draft=Store.dailyDrafts[d]; if(draft&&draft.fields&&Object.prototype.hasOwnProperty.call(draft.fields,f)) return String(draft.fields[f]);
+  if(f==='sleepHours'||f==='sleepMinutes') return sleepParts(d)[f];
+  var v=bodyGet(d,f); return v==null?'':fmtN(v);
+}
+function hasDailyDraft(d){ var draft=Store.dailyDrafts[d]; return !!(draft&&draft.dirty&&Object.keys(draft.dirty).length); }
+function changeDailyDraft(f,value,input){
+  if(['weights','sleepHours','sleepMinutes','steps','waist','lower'].indexOf(f)<0) return;
+  var form=input&&input.closest('.daily-entry'),d=form?form.dataset.dailyDate:S.date,draft=Store.dailyDrafts[d]||(Store.dailyDrafts[d]={fields:{},base:{},dirty:{}}),field=(f==='sleepHours'||f==='sleepMinutes')?'sleep':f,baseline={};
+  try{baseline=form?JSON.parse(form.dataset.dailyBase):{};}catch(e){}
+  if(!draft.dirty[field]){
+    draft.base[field]=Object.prototype.hasOwnProperty.call(baseline,field)?baseline[field]:bodyManual(d,field);
+  }
+  if(field==='sleep'){var parts=form?{sleepHours:form.querySelector('#in-sleep-hours').value,sleepMinutes:form.querySelector('#in-sleep-minutes').value}:sleepParts(d);draft.fields.sleepHours=parts.sleepHours;draft.fields.sleepMinutes=parts.sleepMinutes;}
+  draft.fields[f]=value; draft.dirty[field]=true; delete S.dailyMessage[d]; persist(); paintDailyStatus();
+}
+function dailyStatus(d){
+  if(Store.localErr) return Store.localErr;
+  if(S.dailyMessage[d]) return S.dailyMessage[d];
+  if(hasDailyDraft(d)) return 'Черновик сохранён на телефоне. Нажми «Сохранить», чтобы записать показатели.';
+  return ['weights','sleep','steps','waist','lower'].some(function(f){return bodyGet(d,f)!=null;})?'Показаны сохранённые значения за выбранный день.':'За выбранный день ещё нет записи.';
+}
+function paintDailyStatus(){ var form=view.querySelector('.daily-entry'),d=form?form.dataset.dailyDate:S.date,el=document.getElementById('daily-status'),button=document.getElementById('daily-save'),cancel=document.getElementById('daily-cancel'); if(el) el.textContent=dailyStatus(d); if(button) button.disabled=!hasDailyDraft(d); if(cancel) cancel.hidden=!hasDailyDraft(d); }
+function saveDaily(){
+  var form=view.querySelector('.daily-entry'),d=form?form.dataset.dailyDate:S.date,draft=Store.dailyDrafts[d]; if(!draft||!draft.dirty) return;
+  var changes={},failure='';
+  Object.keys(draft.dirty).forEach(function(f){
+    if(['weights','sleep','steps','waist','lower'].indexOf(f)<0) return;
+    if(bodyManual(d,f)!==draft.base[f]){ failure='Значение уже изменилось в другой записи. Отмени черновик, чтобы увидеть свежие данные.'; return; }
+    if(f==='sleep'){
+      var h=String(draft.fields.sleepHours||'').trim(),m=String(draft.fields.sleepMinutes||'').trim();
+      if(h===''&&m===''){ changes.sleep=null; return; }
+      if((h&&!/^\d+$/.test(h))||(m&&!/^\d+$/.test(m))||Number(h)>24||Number(m)>59||Number(h)*60+Number(m)>1440){ failure='Сон: часы от 0 до 24, минуты от 0 до 59. Общая длительность — не больше 24 часов.'; return; }
+      changes.sleep=(Number(h)*60+Number(m))/60; return;
+    }
+    var text=String(draft.fields[f]==null?'':draft.fields[f]).replace(/\s/g,'');
+    if(text===''){ changes[f]=null; return; }
+    if(!(f==='steps'?/^\d+$/:/^(?:\d+(?:[.,]\d*)?|[.,]\d+)$/).test(text)){ failure='Проверь числа в заполненных полях.'; return; }
+    var v=Number(text.replace(',','.')),max=f==='steps'?200000:f==='weights'?500:300;
+    if(!isFinite(v)||v>max||(f==='steps'?v<0:v<=0)){ failure=f==='steps'?'Шаги: целое число от 0 до 200 000.':'Проверь вес и замеры: ожидается положительное число.'; return; }
+    changes[f]=v;
+  });
+  if(failure){ S.dailyMessage[d]=failure; paintDailyStatus(); return; }
+  var changed=false;
+  Object.keys(changes).forEach(function(f){ if(bodyManual(d,f)!==changes[f]){ bodySet(d,f,changes[f]); changed=true; } });
+  if(changed) touchPath('body/'+d.slice(0,7)+'.json');
+  delete Store.dailyDrafts[d]; persist();
+  S.dailyMessage[d]=Store.localErr||((changed?'Сохранено на телефоне':'Изменений нет')+' · '+fmtLong(d)+'.');
+  S.date=d;
+  if(document.activeElement&&document.activeElement.blur) document.activeElement.blur();
+  render();
+}
+function metricButton(kind,label){ return '<button type="button" class="daily-metric" data-act="metric-open" data-metric="'+kind+'" aria-label="'+esc(label)+': открыть график">'+esc(label)+' '+uiIcon('progress')+'</button>'; }
+function renderDailyPanel(){
+  var d=S.date,show=S.showMeasure||(Store.dailyDrafts[d]&&Store.dailyDrafts[d].dirty&&(Store.dailyDrafts[d].dirty.waist||Store.dailyDrafts[d].dirty.lower));
+  var field=function(id,f,kind,label,unit,mode){
+    return '<div class="daily-row"><div>'+metricButton(kind,label)+'</div><div class="daily-value"><input id="'+id+'" data-body-draft="'+f+'" inputmode="'+(mode||'decimal')+'" autocomplete="off" placeholder="—" aria-label="'+esc(label+(unit?', '+unit:''))+'" value="'+esc(dailyValue(d,f))+'">'+(unit?'<span>'+esc(unit)+'</span>':'')+'</div></div>';
+  };
+  var baseline={};['weights','sleep','steps','waist','lower'].forEach(function(f){baseline[f]=bodyManual(d,f);});
+  var h='<section class="daily-entry" data-daily-date="'+d+'" data-daily-base="'+esc(JSON.stringify(baseline))+'" aria-label="Запись ежедневных показателей"><h2>Запись дня</h2>'+datebar(d)+
+    field('in-weight','weights','weights','Вес','кг');
+  var before=bodySeries('weights').filter(function(x){return x[0]<d;}).slice(-1)[0];
+  if(before) h+='<p class="daily-previous">Последний: '+esc(fmtN(before[1]))+' кг · '+esc(fmtShort(before[0]))+'</p>';
+  h+='<div class="daily-row"><div>'+metricButton('sleep','Сон')+'</div><div class="daily-value daily-sleep"><input id="in-sleep-hours" data-body-draft="sleepHours" inputmode="numeric" autocomplete="off" placeholder="—" aria-label="Часы сна" value="'+esc(dailyValue(d,'sleepHours'))+'"><span>ч</span><input id="in-sleep-minutes" data-body-draft="sleepMinutes" inputmode="numeric" autocomplete="off" placeholder="—" aria-label="Минуты сна" value="'+esc(dailyValue(d,'sleepMinutes'))+'"><span>мин</span></div></div>'+
+    field('in-steps','steps','steps','Шаги','','numeric');
+  ['sleep','steps'].forEach(function(f){ var source=healthProvenance(d,f); if(source) h+='<p class="daily-previous">'+esc((f==='sleep'?'Сон: ':'Шаги: ')+source)+'</p>'; });
+  if(show) h+='<div class="daily-measures">'+field('in-waist','waist','waist','Талия','см')+field('in-lower','lower','lower','Низ живота','см')+'</div>';
+  else h+='<button type="button" class="text-button" data-act="show-measure">'+(bodyGet(d,'waist')!=null||bodyGet(d,'lower')!=null?'Изменить замеры тела':'+ Добавить замеры тела')+'</button>';
+  var relative=d===todayStr()?'сегодня':d===addDays(todayStr(),-1)?'вчера':fmtShort(d);
+  h+='<div class="daily-actions"><button class="btn" id="daily-save" data-act="daily-save" type="button"'+(!hasDailyDraft(d)?' disabled':'')+'>Сохранить за '+esc(relative)+'</button><button class="text-button" id="daily-cancel" data-act="daily-cancel" type="button"'+(!hasDailyDraft(d)?' hidden':'')+'>Отменить изменения</button></div><p class="daily-status" id="daily-status" role="status" aria-live="polite">'+esc(dailyStatus(d))+'</p></section>';
+  return h;
+}
 function avgBetween(series,from,to){ var v=series.filter(function(p){ return p[0]>=from&&p[0]<=to; }).map(function(p){ return p[1]; }); return v.length?v.reduce(function(a,b){ return a+b; },0)/v.length:null; }
 
 /* ---------- render: header ---------- */
@@ -347,10 +423,10 @@ function renderHeader(){
   for(var i=1;i<=p.weeks;i++){ var k=phaseOf(i).key; h+='<span class="'+k+(i<w?'':i===w?' now':' future')+'"></span>'; }
   stripEl.innerHTML=h;
 }
-function paintTabs(){ var active=['body','history','program','settings','health'].indexOf(S.tab)>=0?'overview':S.tab; Array.prototype.forEach.call(tabsEl.querySelectorAll('button'),function(b){ b.setAttribute('aria-selected',String(b.dataset.tab===active)); }); }
+function paintTabs(){ var active=['body','history','program','settings','health','progress'].indexOf(S.tab)>=0?'overview':S.tab; Array.prototype.forEach.call(tabsEl.querySelectorAll('button'),function(b){ b.setAttribute('aria-selected',String(b.dataset.tab===active)); }); }
 
 function uiIcon(name){
-  var paths={left:'<path d="m14 6-6 6 6 6"/>',right:'<path d="m10 6 6 6-6 6"/>',calendar:'<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16"/>',back:'<path d="m10 5-7 7 7 7M3 12h18"/>'};
+  var paths={left:'<path d="m14 6-6 6 6 6"/>',right:'<path d="m10 6 6 6-6 6"/>',calendar:'<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16"/>',back:'<path d="m10 5-7 7 7 7M3 12h18"/>',progress:'<path d="M4 4v16h16M8 15l4-5 4 2 4-6"/>'};
   return '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+(paths[name]||'')+'</svg>';
 }
 function navigate(tab,date){ persist(); S.tab=tab; if(date) S.date=date; S.calendarMonth=null; S.swapOpen=null; render(); window.scrollTo(0,0); }
@@ -365,7 +441,9 @@ function renderOverview(){
   }); });
   var weights=bodySeries('weights').filter(function(x){return x[0]<=today;}),last=weights[weights.length-1],first=last&&weights.filter(function(x){return x[0]>=addDays(last[0],-30);})[0];
   var weekStart=monday(today),count=dates.filter(function(d){return d>=weekStart;}).length;
-  var h='<div class="overview-title"><p class="eyebrow">'+esc(fmtDay(today))+'</p><h2>Твои результаты</h2><p class="muted small">По внесённым записям</p></div>';
+  var h=renderDailyPanel();
+  if(!hasToken()&&pendingCount()) h+='<p class="small muted">Записи сохранены в этом телефоне. Для резервной копии подключи GitHub в настройках.</p>';
+  h+='<div class="overview-title"><h2>Твои результаты</h2><p class="muted small">По внесённым записям</p></div>';
   h+='<section class="overview-section"><div class="section-line"><h3>В упражнениях</h3><button type="button" class="text-button" data-act="navigate" data-tab="history">История</button></div>';
   if(results.length){
     h+='<p class="small muted">Лучший подход последней записи каждого упражнения</p><div class="result-list">';
@@ -686,17 +764,91 @@ function renderBody(){
 }
 
 /* ---------- render: history ---------- */
-function metric(ex,rows){
-  if(ex.noWeight||(ex.bw&&!maxW(rows))) return {v:rows.reduce(function(a,r){ return a+r.r; },0),lbl:repsWord(ex)+' за тренировку'};
-  var best=0; rows.forEach(function(r){ if(r.w>0){ var e=r.w*(1+r.r/30); if(e>best) best=e; } });
-  return {v:Math.round(best*10)/10,lbl:'кг, оценка максимума'};
+var PROGRESS_INFO={weights:{name:'Вес',unit:'кг'},waist:{name:'Талия',unit:'см'},lower:{name:'Низ живота',unit:'см'},steps:{name:'Шаги',unit:'шагов'},sleep:{name:'Сон',unit:'ч'}};
+function progressWidth(){ var cs=getComputedStyle(view); return Math.max(240,Math.round(view.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight))); }
+function progressSource(d,kind){ if(bodyManual(d,kind)!=null) return 'Вручную'; var h=S.health[d]; return h&&h.source?h.source:'Apple Health'; }
+function progressTargets(){
+  var p=P()||{},stepsText=String(p.stepsTarget||''),stepMatch=stepsText.replace(/\s/g,'').match(/\d+(?:[.,]\d+)?/),step=stepMatch?Number(stepMatch[0].replace(',','.')):null;
+  if(step!=null&&/тыс|thousand|\bk\b/i.test(stepsText)) step*=1000;
+  var sleepText=String(p.sleepTarget||''),sleep=sleepText.match(/\d+(?:[.,]\d+)?/g),range=sleep&&sleep.length>=2?sleep.slice(0,2).map(function(n){return Number(n.replace(',','.'));}):null;
+  return {steps:isFinite(step)&&step>0?step:null,sleep:range&&range[0]>=0&&range[1]>=range[0]&&range[1]<=24?range:null,stepsLabel:stepsText,sleepLabel:sleepText};
 }
-function spark(vals){
-  if(vals.length<2) return '';
-  var W=600,H=64,p=6,lo=Math.min.apply(null,vals),hi=Math.max.apply(null,vals); if(hi===lo){ hi+=1; lo-=1; }
-  var x=function(i){ return p+(W-2*p)*i/(vals.length-1); },y=function(v){ return p+(H-2*p)*(hi-v)/(hi-lo); };
-  var d=vals.map(function(v,i){ return (i?'L':'M')+x(i).toFixed(1)+' '+y(v).toFixed(1); }).join(' ');
-  return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" aria-hidden="true"><path class="ch-avg" fill="none" stroke="#1f55c8" d="'+d+'"/><circle class="ch-end" fill="#1f55c8" cx="'+x(vals.length-1).toFixed(1)+'" cy="'+y(vals[vals.length-1]).toFixed(1)+'" r="4.5"/></svg>';
+function progressModel(){
+  var targets=progressTargets(),kind=S.progress.kind;
+  return SportProgress.build(kind,bodySeries(kind).map(function(p){return [p[0],p[1],progressSource(p[0],kind)];}),{today:todayStr(),period:S.progress.period,cycleStart:P().start,stepsTarget:targets.steps,sleepTarget:targets.sleep});
+}
+function progressPeriods(period){ return '<div class="progress-periods" role="group" aria-label="Период графика">'+[[7,'7 дней'],[30,'30 дней'],['cycle','Весь цикл']].map(function(x){return '<button type="button" data-act="progress-period" data-period="'+x[0]+'" aria-pressed="'+String(String(period)===String(x[0]))+'">'+x[1]+'</button>';}).join('')+'</div>'; }
+function progressNumber(value,kind){ if(value==null) return '—'; if(kind==='sleep'){var minutes=Math.round(value*60);return Math.floor(minutes/60)+' ч '+minutes%60+' мин';}return kind==='steps'?thousands(value):fmtN(value); }
+function progressStats(model){
+  var kind=model.kind,info=PROGRESS_INFO[kind],mean=progressNumber(kind==='weights'&&model.mean!=null?Math.round(model.mean*10)/10:model.mean,kind),delta=model.delta==null?'—':kind==='sleep'?signed(Math.round(model.delta*60),'мин'):signed(model.delta,info.unit);
+  var label=kind==='steps'?'Среднее за 7 завершённых дней':'Среднее за 7 дней',caption='Данные за '+model.summaryCount+' из 7 дней · '+fmtShort(model.summaryFrom)+'–'+fmtShort(model.summaryTo);
+  if(kind==='waist'||kind==='lower'){
+    var last=bodySeries(kind).filter(function(x){return x[0]<=todayStr();}).slice(-1)[0];
+    mean=last?fmtN(last[1]):'—';label='Последний замер'+(last?' · '+fmtShort(last[0]):'');delta=model.change==null?'—':signed(model.change,info.unit);caption=model.changeFrom?'От '+fmtShort(model.changeFrom)+' до '+fmtShort(model.lastDate):'Для сравнения за 4 недели нужны замеры с интервалом 21–35 дней';
+  }
+  var h='<div class="progress-summary"><div><span>'+esc(label)+'</span><strong>'+esc(mean)+(kind==='sleep'?'':' <small>'+info.unit+'</small>')+'</strong></div><div><span>'+esc(kind==='waist'||kind==='lower'?'Изменение за 4 недели':'К предыдущим 7 дням')+'</span><strong>'+esc(delta)+'</strong></div></div><p class="small muted">'+esc(caption)+'</p>';
+  if(model.delta==null&&kind!=='waist'&&kind!=='lower') h+='<p class="small muted">'+(kind==='weights'?'Для недельного сравнения нужны хотя бы 4 взвешивания в каждой неделе.':'Для недельного сравнения нужны данные хотя бы за 5 дней в каждой неделе.')+'</p>';
+  if((kind==='weights'||kind==='waist'||kind==='lower')&&model.sinceStart!=null) h+='<p class="small muted">От первой записи цикла: '+esc(signed(model.sinceStart,info.unit))+'.</p>';
+  if((kind==='steps'||kind==='sleep')&&model.summaryGoalDays!=null) h+='<p class="small muted">'+(kind==='steps'?'Ориентир выполнен':'В диапазоне сна')+': '+model.summaryGoalDays+' из '+model.summaryCount+' дней с данными.</p>';
+  return h;
+}
+function progressDetails(model){
+  var date=S.progress.selected,point=model.points.filter(function(p){return p.date===date;})[0],info=PROGRESS_INFO[model.kind];
+  if(!point) return '<p class="small muted" id="progress-detail">Нажми на график или выбери дату ниже.</p>';
+  return '<section id="progress-detail" class="progress-detail" aria-live="polite"><b>'+esc(fmtDateI.format(parseYmd(point.date)))+'</b><p>'+(point.value==null?'Нет данных':esc(progressNumber(point.value,model.kind)+(model.kind==='sleep'?'':' '+info.unit)))+(point.partial?' · день ещё не завершён':'')+'</p>'+(point.value!=null?'<p class="small muted">'+esc(point.source||'Вручную')+'</p>':'')+'<button type="button" class="text-button" data-act="progress-edit" data-date="'+point.date+'">'+(point.value==null?'Добавить запись':'Изменить запись')+'</button></section>';
+}
+function progressDateList(model,rows){
+  return '<details class="progress-records"><summary>Записи за период · '+model.count+'</summary><div class="progress-record-list">'+model.points.filter(function(p){return p.value!=null;}).reverse().map(function(p){return '<button type="button" data-act="progress-point" data-date="'+p.date+'" data-value="'+p.value+'"><span>'+esc(fmtShort(p.date))+'</span><span>'+esc(rows&&rows[p.date]?rows[p.date]:progressNumber(p.value,model.kind)+(model.kind==='sleep'?'':' '+(PROGRESS_INFO[model.kind]||{}).unit))+(p.partial?' · неполный день':'')+'</span></button>';}).join('')+'</div></details>';
+}
+function renderProgress(){
+  var model=progressModel(),info=PROGRESS_INFO[model.kind],targets=progressTargets(),goal=model.kind==='steps'?targets.steps:model.kind==='sleep'?targets.sleep:null;
+  var h='<button class="back-link" type="button" data-act="progress-back">'+uiIcon('back')+'Назад</button><div class="ses-head"><h2>'+info.name+'</h2><span>'+esc(fmtShort(model.from)+'–'+fmtShort(model.to))+'</span></div>'+progressPeriods(S.progress.period)+'<section class="progress-insights">'+progressStats(model)+'</section>';
+  if(hasDailyDraft(S.progress.returnDate))h+='<p class="small muted">График показывает сохранённые записи. Черновик за '+esc(fmtShort(S.progress.returnDate))+' остаётся на главной.</p>';
+  h+='<div id="progress-chart-wrap">'+SportProgressView.chart(model,{width:progressWidth(),selectedDate:S.progress.selected,goal:goal})+'</div>';
+  if(model.kind==='weights') h+='<div class="progress-legend"><span>● Измерения</span><span class="progress-trend-label">— Среднее за 7 дней</span></div>';
+  if(model.kind==='steps'&&targets.steps) h+='<p class="small muted">Ориентир программы: '+esc(targets.stepsLabel)+'. Линия цели — от '+thousands(targets.steps)+' шагов. Сегодняшний день не входит в недельное среднее.</p>';
+  if(model.kind==='sleep'&&targets.sleep) h+='<p class="small muted">Диапазон программы: '+esc(targets.sleepLabel)+'. Показана длительность сна.</p>';
+  if(!model.count) h+='<p class="muted">За этот период записей нет. Можно выбрать другой период или добавить показатель на главной.</p>';
+  h+=progressDetails(model)+progressDateList(model);
+  if((model.kind==='weights'||model.kind==='waist')&&Array.isArray(P().milestones))h+='<details class="progress-records"><summary>Ориентиры программы</summary><ul class="list">'+P().milestones.map(function(m){return '<li><span>'+esc(m.when)+'</span><span>'+esc(model.kind==='weights'?m.weight:m.waist)+'</span></li>';}).join('')+'</ul></details>';
+  return h;
+}
+function selectProgressPoint(date){
+  if(S.tab==='progress'){
+    S.progress.selected=date;var model=progressModel(),detail=document.getElementById('progress-detail');if(detail) detail.outerHTML=progressDetails(model); redrawProgress();
+  }else if(S.tab==='history'){S.strengthSelected=date;var detail=document.getElementById('progress-detail');if(detail)detail.outerHTML=strengthDetails(strengthModel());redrawProgress();}
+}
+function redrawProgress(){
+  var host=document.getElementById('progress-chart-wrap');if(!host||!window.SportProgressView) return;
+  if(S.tab==='progress'){var targets=progressTargets();host.innerHTML=SportProgressView.chart(progressModel(),{width:progressWidth(),selectedDate:S.progress.selected,goal:S.progress.kind==='steps'?targets.steps:S.progress.kind==='sleep'?targets.sleep:null});}
+  else if(S.tab==='history'&&S.exSel){var state=strengthModel();host.innerHTML=SportProgressView.chart(state.model,{width:progressWidth(),selectedDate:S.strengthSelected,title:state.ex&&state.ex.name});}
+}
+function strengthModel(){
+  var ex=findEx(S.exSel),mode=ex&&ex.noWeight?'reps':(S.strengthMode||'weight'),rows={},series=[];
+  if(ex) sortedDates(false).filter(function(d){return d<=todayStr();}).forEach(function(d){
+    var entries=filled(S.workouts[d].sets&&S.workouts[d].sets[ex.id]);if(mode==='weight')entries=entries.filter(function(r){return typeof r.w==='number'&&isFinite(r.w)&&r.w>=0;});if(!entries.length)return;
+    var best=entries.slice().sort(function(a,b){return mode==='reps'?b.r-a.r||(b.w||0)-(a.w||0):(b.w||0)-(a.w||0)||b.r-a.r;})[0];rows[d]=best;series.push([d,mode==='reps'?best.r:(best.w||0),'Тренировка']);
+  });
+  return {ex:ex,mode:mode,rows:rows,model:SportProgress.build('waist',series,{today:todayStr(),period:S.strengthPeriod,cycleStart:P().start})};
+}
+function strengthDetails(state){
+  var date=S.strengthSelected,row=state.rows[date];
+  if(!date)return '<p class="small muted" id="progress-detail">Нажми на точку, чтобы посмотреть подход и открыть тренировку.</p>';
+  return '<section id="progress-detail" class="progress-detail" aria-live="polite"><b>'+esc(fmtDateI.format(parseYmd(date)))+'</b><p>'+esc(row?setTxt(state.ex,row):'Записи по этому упражнению нет')+'</p><button type="button" class="text-button" data-act="progress-edit" data-date="'+date+'">Открыть тренировку</button></section>';
+}
+function renderStrengthProgress(){
+  var state=strengthModel(),ex=state.ex,model=state.model;if(!ex)return '';
+  var known=model.points.filter(function(p){return p.value!=null;}),last=known[known.length-1],lastRow=last&&state.rows[last.date],previous=null,comparison='Нет сопоставимого подхода за период';
+  if(lastRow){
+    for(var i=known.length-2;i>=0;i--){var r=state.rows[known[i].date];if((!ex.noWeight&&r.r===lastRow.r)||(r.w||0)===(lastRow.w||0)){previous={date:known[i].date,row:r};break;}}
+    if(previous){var delta=!ex.noWeight&&previous.row.r===lastRow.r?(lastRow.w||0)-(previous.row.w||0):lastRow.r-previous.row.r;comparison=signed(delta,!ex.noWeight&&previous.row.r===lastRow.r?(ex.unit||'кг'):repsWord(ex))+' к '+fmtShort(previous.date)+' · '+setTxt(ex,previous.row);}
+  }
+  var h=progressPeriods(S.strengthPeriod);
+  if(!ex.noWeight)h+='<div class="progress-periods" role="group" aria-label="Что показать в упражнении">'+[['weight','Вес'],['reps','Повторы']].map(function(x){return '<button type="button" data-act="strength-mode" data-mode="'+x[0]+'" aria-pressed="'+(state.mode===x[0])+'">'+x[1]+'</button>';}).join('')+'</div>';
+  h+='<div class="progress-summary"><div><span>Последний лучший подход'+(last?' · '+esc(fmtShort(last.date)):'')+'</span><strong>'+esc(lastRow?setTxt(ex,lastRow):'—')+'</strong></div></div><p class="small muted">'+esc(comparison)+'</p><p class="small muted">'+esc(state.mode==='weight'?'Рабочий вес лучших подходов · '+(ex.unit||'кг'):repsWord(ex)+' лучшего подхода')+'. Каждая замена упражнения учитывается отдельно.</p>';
+  h+='<div id="progress-chart-wrap">'+SportProgressView.chart(model,{width:progressWidth(),selectedDate:S.strengthSelected,title:ex.name})+'</div>'+strengthDetails(state);
+  var labels={};Object.keys(state.rows).forEach(function(d){labels[d]=setTxt(ex,state.rows[d]);});
+  return h+progressDateList(model,labels);
 }
 function renderHistory(){
   var p=P(),all=allExercises();
@@ -713,8 +865,7 @@ function renderHistory(){
   if(ex){
     var sess=[]; sortedDates(false).forEach(function(d){ var rows=filled(S.workouts[d].sets&&S.workouts[d].sets[ex.id]); if(rows.length) sess.push({d:d,rows:rows}); });
     if(sess.length){
-      var ms=sess.map(function(s){ return metric(ex,s.rows); });
-      h+='<div class="panel">'+spark(ms.map(function(m){ return m.v; }))+'<p class="small muted mt6">Последнее: <b class="ink">'+fmtN(ms[ms.length-1].v)+'</b> '+esc(ms[ms.length-1].lbl)+(ms.length>1?' · было '+fmtN(ms[0].v):'')+'</p></div>';
+      h+=renderStrengthProgress();
       h+='<div class="panel tbl"><table><thead><tr><th>Дата</th><th>Подходы</th></tr></thead><tbody>';
       sess.slice().reverse().slice(0,20).forEach(function(s){ h+='<tr><td>'+esc(fmtShort(s.d))+'</td><td>'+esc(s.rows.map(function(r){ return setTxt(ex,r); }).join(' · '))+'</td></tr>'; });
       h+='</tbody></table></div>';
@@ -857,7 +1008,7 @@ function renderHealth(){
 /* ---------- render: settings ---------- */
 function renderSettings(){
   var c=Store.cfg,n=pendingCount();
-  var h='<div class="ses-head"><h2>Настройки</h2><span>Ночной лайм · версия 8</span></div>';
+  var h='<div class="ses-head"><h2>Настройки</h2><span>Ночной лайм · версия 9</span></div>';
   h+='<div class="panel"><h3>Apple Health</h3><p class="small muted mt8">Импорт сна и шагов из «Здоровья» через команду на iPhone. Ручные значения сохраняют приоритет.</p><div class="row mt8"><button class="btn" type="button" data-act="health-open">Импортировать сон и шаги</button><a class="text-button" href="health-setup.html" target="_blank" rel="noopener noreferrer">Инструкция</a></div></div>';
   h+='<div class="panel"><h3>Копия данных</h3><p class="small muted mt8">Все записи, включая ожидающие синхронизации. Токен доступа в файл не включается.</p><div class="row mt8"><button type="button" class="btn" data-act="download-backup">Скачать копию данных</button><button type="button" class="btn-ghost" data-act="download-upgrade-backup">Копия до обновления</button></div><p class="small muted mt8" id="backup-msg">'+esc(backupError)+'</p></div>';
   if(Store.state==='error'&&Store.err) h+='<div class="banner">'+esc(Store.err)+'</div>';
@@ -886,9 +1037,10 @@ function exportJSON(){ return JSON.stringify({exportedAt:new Date().toISOString(
 function downloadBackup(before){
   var msg=document.getElementById('backup-msg');
   try{
-    var data=before?JSON.parse(localStorage.getItem(UPGRADE_BACKUP_KEY)||'null'):{cfg:Store.cfg,files:Store.files,pending:Store.pending,lastSync:Store.lastSync};
+    var data=before?JSON.parse(localStorage.getItem(DAILY_BACKUP_KEY)||localStorage.getItem(UPGRADE_BACKUP_KEY)||'null'):{cfg:Store.cfg,files:Store.files,pending:Store.pending,dailyDrafts:Store.dailyDrafts,lastSync:Store.lastSync};
     if(!data){ if(msg) msg.textContent='Копии до обновления нет. Можно скачать текущие записи.'; return; }
     var c=data.cfg||{},out={format:LS_KEY,exportedAt:new Date().toISOString(),cfg:{owner:c.owner,repo:c.repo,branch:c.branch},files:data.files||{},pending:data.pending||{},lastSync:data.lastSync||0};
+    if(data.dailyDrafts&&Object.keys(data.dailyDrafts).length)out.dailyDrafts=data.dailyDrafts;
     var url=URL.createObjectURL(new Blob([JSON.stringify(out,null,2)],{type:'application/json'})),a=document.createElement('a');
     a.href=url; a.download='sport-'+(before?'before-update-':'backup-')+todayStr()+'.json'; document.body.appendChild(a); a.click(); a.remove();
     setTimeout(function(){ URL.revokeObjectURL(url); },60000);
@@ -917,12 +1069,13 @@ function render(){
   var out='';
   if(['body','history','program'].indexOf(S.tab)>=0) out+='<button type="button" class="back-link" data-act="navigate" data-tab="overview">'+uiIcon('back')+'Обзор</button>';
   if(S.tab==='body'&&S.healthNotice&&S.healthNotice.date===S.date) out+='<p class="small muted" data-health-notice role="status">'+esc(S.healthNotice.text)+'</p>';
-  if(!hasToken()&&pendingCount()) out+='<div class="banner">Записи пока только в этом телефоне. Подключи GitHub в настройках, чтобы они не потерялись.</div>';
+  if(S.tab!=='overview'&&!hasToken()&&pendingCount()) out+='<div class="banner">Записи пока только в этом телефоне. Подключи GitHub в настройках, чтобы они не потерялись.</div>';
   if(S.tab==='overview') out+=renderOverview();
   else if(S.tab==='today') out+=renderToday();
   else if(S.tab==='food') out+=renderFood();
   else if(S.tab==='body') out+=renderBody();
   else if(S.tab==='history') out+=renderHistory();
+  else if(S.tab==='progress') out+=renderProgress();
   else out+=renderProgram();
   view.innerHTML=out;
   paintMeters();
@@ -940,10 +1093,26 @@ tabsEl.addEventListener('click',function(e){
 });
 gearEl.addEventListener('click',function(){ if(S.tab==='settings') navigate(S.returnTab); else {S.returnTab=S.tab; navigate('settings');} });
 view.addEventListener('click',function(e){
+  var chart=e.target.closest&&e.target.closest('#progress-chart');
+  if(chart&&(S.tab==='progress'||S.tab==='history')){
+    var box=chart.getBoundingClientRect(),x=(e.clientX-box.left)*chart.viewBox.baseVal.width/box.width,left=Number(chart.dataset.plotLeft),right=Number(chart.dataset.plotRight),model=S.tab==='progress'?progressModel():strengthModel().model;
+    if(x>=left&&x<=right&&model.points.length){var ratio=Math.max(0,Math.min(1,(x-left)/(right-left))),bar=model.kind==='steps'||model.kind==='sleep',index=bar?Math.min(model.points.length-1,Math.floor(ratio*model.points.length)):Math.round(ratio*(model.points.length-1));selectProgressPoint(model.points[index].date);}return;
+  }
   var b=e.target.closest('[data-act]'); if(!b||b.disabled) return;
   var act=b.dataset.act;
   if(act==='navigate') navigate(b.dataset.tab,b.dataset.date);
-  else if(act==='exercise-history'){ S.exSel=b.dataset.ex; navigate('history'); }
+  else if(act==='daily-save') saveDaily();
+  else if(act==='daily-cancel'){delete Store.dailyDrafts[S.date];delete S.dailyMessage[S.date];persist();render();}
+  else if(act==='metric-open'){if(!PROGRESS_INFO[b.dataset.metric])return;S.progress={kind:b.dataset.metric,period:30,returnTab:S.tab,returnDate:S.date,selected:null};navigate('progress');}
+  else if(act==='progress-back') navigate(S.progress.returnTab,S.progress.returnDate);
+  else if(act==='progress-period'){var period=b.dataset.period==='cycle'?'cycle':Number(b.dataset.period);if(S.tab==='history'){S.strengthPeriod=period;S.strengthSelected=null;}else{S.progress.period=period;S.progress.selected=null;}render();}
+  else if(act==='progress-point') selectProgressPoint(b.dataset.date);
+  else if(act==='progress-edit'){
+    if(S.tab==='history')navigate('today',b.dataset.date);
+    else{var kind=S.progress.kind;S.showMeasure=kind==='waist'||kind==='lower';navigate('overview',b.dataset.date);var input=document.getElementById(kind==='weights'?'in-weight':kind==='sleep'?'in-sleep-hours':'in-'+kind);if(input)input.focus({preventScroll:true});}
+  }
+  else if(act==='strength-mode'){S.strengthMode=b.dataset.mode;S.strengthSelected=null;render();}
+  else if(act==='exercise-history'){ S.exSel=b.dataset.ex; S.strengthSelected=null; navigate('history'); }
   else if(act==='download-backup'||act==='download-upgrade-backup') downloadBackup(act==='download-upgrade-backup');
   else if(act==='health-open') navigate('health');
   else if(act==='health-preview') previewHealthText();
@@ -1011,7 +1180,8 @@ view.addEventListener('click',function(e){
 });
 view.addEventListener('input',function(e){
   var t=e.target;
-  if(t.id==='health-json'){
+  if(t.dataset.bodyDraft){changeDailyDraft(t.dataset.bodyDraft,t.value,t);}
+  else if(t.id==='health-json'){
     S.healthText=t.value; S.healthPreview=null; S.healthPreviewText=''; S.healthError=''; S.healthReadSequence++;
     paintHealthPreview();
   } else if(t.dataset.f){
@@ -1041,7 +1211,7 @@ view.addEventListener('input',function(e){
     paintMeters();
   }
 });
-view.addEventListener('change',function(e){ if(e.target.id==='ex-select'){ S.exSel=e.target.value; render(); } });
+view.addEventListener('change',function(e){ if(e.target.id==='ex-select'){ S.exSel=e.target.value;S.strengthSelected=null;render(); } });
 view.addEventListener('focusout',function(e){
   var t=e.target;
   if(t.matches&&t.matches('input,textarea')){
@@ -1054,6 +1224,7 @@ view.addEventListener('focusout',function(e){
 });
 view.addEventListener('keydown',function(e){
   if(calendarKey(e)) return;
+  if(e.key==='Enter'&&e.target.dataset.bodyDraft){e.preventDefault();saveDaily();return;}
   if(e.key!=='Enter'||!e.target.classList||!e.target.classList.contains('cell')) return;
   e.preventDefault();
   var cells=Array.prototype.slice.call(view.querySelectorAll('input.cell'));
@@ -1072,6 +1243,7 @@ if(!hasToken()&&!S.program) S.tab='settings';
 render();
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function(){});
 if('ResizeObserver' in window) new ResizeObserver(function(){
+  if(S.tab==='progress'||S.tab==='history'){var current=document.getElementById('progress-chart');if(current&&Math.abs(current.viewBox.baseVal.width-progressWidth())>1)redrawProgress();return;}
   if(S.tab!=='body') return;
   var chart=view.querySelector('svg.chart'); if(!chart) return;
   var cs=getComputedStyle(view),width=Math.max(240,Math.round(view.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight)));
@@ -1081,5 +1253,5 @@ if('ResizeObserver' in window) new ResizeObserver(function(){
 }).observe(view);
 if(hasToken()) syncNow();
 var lastDay=todayStr();
-setInterval(function(){ var t=todayStr(); if(t!==lastDay){ if(S.date===lastDay) S.date=t; lastDay=t; soft(); } },60000);
+setInterval(function(){var t=todayStr();if(t!==lastDay){var a=document.activeElement,editing=a&&view.contains(a)&&(/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)||a.closest('.calendar'));if(S.date===lastDay&&!editing&&!hasDailyDraft(lastDay))S.date=t;lastDay=t;soft();}},60000);
 })();
