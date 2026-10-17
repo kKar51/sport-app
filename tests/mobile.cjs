@@ -192,12 +192,40 @@ async function main() {
 
     await tab('food');
     await choose('2026-10-09');
-    await page.locator('[data-act="meal"][data-opt="other"]').tap();
     await page.locator('#fo-t-breakfast').fill('Тестовая запись еды');
     await choose('2026-10-10');
-    equal(await page.locator('#fo-t-breakfast').count(), 0, 'Food selection changes the actual day');
+    equal(await page.locator('#fo-t-breakfast').inputValue(), '', 'Food selection changes the actual day');
     await choose('2026-10-09');
     equal(await page.locator('#fo-t-breakfast').inputValue(), 'Тестовая запись еды', 'Food entry survives date changes');
+    await choose('2026-10-10');
+    await page.locator('[data-act="meal-copy"][data-meal="breakfast"]').tap();
+    equal(await page.locator('#fo-t-breakfast').inputValue(), 'Тестовая запись еды', 'Same as yesterday copies the meal');
+    await page.locator('#fo-t-breakfast').fill('');
+    await page.waitForTimeout(400);
+    equal((await store()).files['food/2026-10.json'].data.days['2026-10-10'].meals.breakfast, undefined, 'Clearing the text removes the meal entry');
+    await choose('2026-10-09');
+
+    // One tap logs the planned set and starts the rest timer.
+    await tab('today');
+    await choose('2026-10-12');
+    await page.locator('#w-sample-0').fill('50');
+    await page.locator('#r-sample-0').fill('10');
+    ok(await page.locator('#r-sample-0').evaluate(el => el.closest('.set').classList.contains('done')), 'Typed set is marked done');
+    await choose('2026-10-13');
+    equal(await page.locator('#w-sample-0').getAttribute('placeholder'), '50', 'Target weight comes from the last session');
+    equal(await page.locator('#r-sample-0').getAttribute('placeholder'), '11', 'Target reps add one toward the top of the range');
+    await page.locator('[data-act="set-ok"][data-ex="sample"][data-i="0"]').tap();
+    await page.waitForTimeout(400);
+    equal((await store()).files['workouts/2026-10-13.json'].data.sets.sample[0], { w: 50, r: 11 }, 'Check saves the target as done');
+    ok(await page.locator('.rest-timer').isVisible(), 'Rest timer starts after a set');
+    await page.locator('.rest-timer button').tap();
+    ok(!(await page.locator('.rest-timer').isVisible()), 'Rest timer can be skipped');
+    await page.locator('[data-act="set-ok"][data-ex="sample"][data-i="0"]').tap();
+    equal((await store()).files['workouts/2026-10-13.json'].data.sets.sample[0], { w: 50, r: 11 }, 'Second check keeps the logged set');
+    await page.locator('.rest-timer button').tap();
+    await page.locator('[data-act="finish"]').tap();
+    ok((await page.locator('.wk-summary').innerText()).includes('1 из'), 'Finish shows the session summary');
+    await tab('food');
     await open();
     await tab('body');
     await tab('today');
@@ -266,7 +294,7 @@ async function main() {
       await navigator.serviceWorker.ready;
       if (!navigator.serviceWorker.controller) await new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }));
     });
-    ok((await offlinePage.evaluate(() => caches.keys())).includes('sport-journal-v12'), 'Updated offline cache is installed');
+    ok((await offlinePage.evaluate(() => caches.keys())).includes('sport-journal-v13'), 'Updated offline cache is installed');
     await offlineContext.setOffline(true);
     await offlinePage.reload({ waitUntil: 'domcontentloaded' });
     await offlinePage.locator('#tabs [data-tab="today"]').tap();
