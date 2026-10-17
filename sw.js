@@ -17,7 +17,9 @@ function networkFirst(req){
     var settled=false;
     var fromCache=function(){ return caches.match(req,{ignoreSearch:true}).then(function(r){ return r||(req.mode==='navigate'?caches.match('index.html'):null); }); };
     var timer=setTimeout(function(){ fromCache().then(function(r){ if(r&&!settled){ settled=true; resolve(r); } }); },2500);
-    fetch(req).then(function(res){
+    // Pages may be HTTP-cached for 10 minutes; revalidate them so a new version shows on the next open.
+    var url=new URL(req.url),page=req.mode==='navigate'||/\.(html|webmanifest)$|\/$/.test(url.pathname);
+    (page?fetch(req.url,{cache:'no-cache',credentials:'same-origin'}):fetch(req)).then(function(res){
       if(res&&res.ok){ var copy=res.clone(); caches.open(CACHE).then(function(c){ c.put(req,copy); }); }
       if(!settled){ settled=true; clearTimeout(timer); resolve(res); }
     }).catch(function(){
