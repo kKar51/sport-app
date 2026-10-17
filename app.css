@@ -456,3 +456,34 @@ line.st-grid{stroke:var(--line);stroke-width:1}
 .st-lift b{font-size:18px;font-weight:500;text-align:right;font-variant-numeric:tabular-nums}
 .st-warm{fill:var(--warn-soft)}
 .st-mark{fill:var(--ink)}
+
+/* Today screen (version 12): week strip, plan of the day, morning numbers, what is left to log. */
+.td-week{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.td-day{display:grid;justify-items:center;gap:4px;padding:7px 0 8px;border:0;border-radius:10px;background:none;color:var(--muted);min-height:44px}
+.td-day b{font-size:11px;font-weight:500;letter-spacing:.03em;text-transform:uppercase}
+.td-day small{font-size:12px;font-variant-numeric:tabular-nums}
+.td-mark{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:600;border:1.5px dashed var(--line)}
+.td-day.k-gym .td-mark,.td-day.k-run .td-mark{border:0;background:var(--accent);color:var(--on-accent)}
+.td-day.k-run .td-mark{opacity:.7}
+.td-day.k-rest .td-mark{border:1.5px solid var(--line)}
+.td-day.k-miss .td-mark{border:1.5px solid var(--warn)}
+.td-day.sel{background:var(--surface-2);color:var(--ink)}
+.td-label{font-size:12px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.td-plan{background:var(--surface-2);border-radius:16px;padding:16px;display:grid;gap:8px;justify-items:start}
+.td-plan h2{font-size:24px;font-weight:500;letter-spacing:-.4px;line-height:1.15}
+.td-plan p{font-size:14px;color:var(--muted)}
+.td-plan .td-done{color:var(--accent)}
+.td-plan .btn,.td-plan .btn-ghost{margin-top:4px}
+.td-mood{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding-bottom:16px;border-bottom:1px solid var(--line)}
+.td-mood small{display:block;font-size:12px;color:var(--muted)}
+.td-mood-btns{display:flex;gap:6px}
+.td-mood-btns button{width:44px;height:44px;border:0;border-radius:10px;background:var(--surface-2);color:var(--muted);font-weight:600;font-variant-numeric:tabular-nums}
+.td-mood-btns button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.td-todo{display:grid}
+.td-todo .td-label{margin-bottom:6px}
+.td-row{display:grid;grid-template-columns:14px minmax(0,1fr) auto;gap:10px;align-items:center;padding:14px 0;border:0;border-bottom:1px solid var(--line);background:none;color:var(--ink);text-align:left;min-height:48px}
+.td-dot{width:10px;height:10px;border-radius:50%;border:1.5px solid var(--warn)}
+.td-row.ok .td-dot{border:0;background:var(--accent)}
+.td-row-v{color:var(--muted);font-size:14px;font-variant-numeric:tabular-nums}
+.td-teaser{display:flex;justify-content:space-between;gap:12px;align-items:center;border:1px solid var(--line);border-radius:14px;padding:14px;background:none;color:var(--ink);text-align:left;font-size:14px}
+.td-teaser span:last-child{color:var(--accent);white-space:nowrap}

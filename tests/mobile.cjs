@@ -61,7 +61,17 @@ async function main() {
     page.on('pageerror', error => errors.push(error.message));
     await page.clock.install({ time: new Date('2026-10-15T12:00:00+03:00') });
     await page.goto(url);
-    ok((await page.locator('#view').innerText()).includes('Твои результаты'), 'Overview opens first');
+    equal(await page.locator('.td-plan').count(), 1, 'Today screen opens first with the plan of the day');
+    const moodStore = () => page.evaluate(key => JSON.parse(localStorage.getItem(key)), key);
+    await page.locator('[data-act="mood"][data-n="4"]').tap();
+    await page.waitForTimeout(1200);
+    let moodSaved = await moodStore();
+    equal(moodSaved.files['body/2026-10.json'].data.mood['2026-10-15'], 4, 'Wellbeing is saved with one tap');
+    ok(moodSaved.pending['body/2026-10.json'], 'Wellbeing is queued for sync');
+    await page.locator('[data-act="mood"][data-n="4"]').tap();
+    await page.waitForTimeout(1200);
+    moodSaved = await moodStore();
+    equal(moodSaved.files['body/2026-10.json'].data.mood['2026-10-15'], undefined, 'Tapping the same value again clears it');
     async function tab(name) {
       if (['overview', 'today', 'food'].includes(name)) await page.locator(`#tabs [data-tab="${name}"]`).tap();
       else { await page.locator('#tabs [data-tab="overview"]').tap(); await page.locator(`.overview-more [data-tab="${name}"]`).tap(); }
@@ -123,17 +133,24 @@ async function main() {
     await toggle.tap();
     equal(await toggle.getAttribute('aria-expanded'), 'false', 'Tapping date again closes the calendar');
 
+    // Weight lives on «Вес и замеры» (and the Today screen); the workout tab keeps only the note.
     await choose('2026-10-31');
-    await page.locator('#in-weight').fill('80,5');
     await page.locator('#in-note').fill('Запись за октябрь');
     await choose('2026-11-01');
-    equal(await page.locator('#in-weight').inputValue(), '', 'New day has its own body record');
     equal(await page.locator('#in-note').inputValue(), '', 'New day has its own workout record');
-    await page.locator('#in-weight').fill('80,1');
     await page.locator('#in-note').fill('Запись за ноябрь');
     await choose('2026-10-31');
-    equal(await page.locator('#in-weight').inputValue(), '80,5', 'Body input survives date changes');
     equal(await page.locator('#in-note').inputValue(), 'Запись за октябрь', 'Workout input survives date changes');
+    equal(await page.locator('#in-weight').count(), 0, 'Workout tab has no second weight input');
+    await tab('body');
+    await choose('2026-10-31');
+    await page.locator('#in-weight').fill('80,5');
+    await choose('2026-11-01');
+    equal(await page.locator('#in-weight').inputValue(), '', 'New day has its own body record');
+    await page.locator('#in-weight').fill('80,1');
+    await choose('2026-10-31');
+    equal(await page.locator('#in-weight').inputValue(), '80,5', 'Body input survives date changes');
+    await tab('today');
     const saved = await store();
     equal(saved.files['body/2026-10.json'].data.weights['2026-10-31'], 80.5, 'October body file');
     equal(saved.files['body/2026-11.json'].data.weights['2026-11-01'], 80.1, 'November body file');
@@ -207,14 +224,14 @@ async function main() {
         await layout(`${colorScheme} ${width}x${height} settings`);
         await page.locator('#gear').tap();
         await tab('today');
-        await page.locator('#in-weight').focus();
+        await page.locator('#in-note').focus();
         equal(await page.evaluate(() => visualViewport.scale), 1, 'Input focus keeps scale');
-        await page.locator('#in-weight').blur();
+        await page.locator('#in-note').blur();
       }
     }
     await page.setViewportSize({ width: 390, height: 844 });
     await page.emulateMedia({ colorScheme: 'light' });
-    for (const selector of ['.cycle-title', '.panel', '#in-weight']) {
+    for (const selector of ['.cycle-title', '.chips', '#in-note']) {
       const target = page.locator(selector).first();
       await target.evaluate(el => el.scrollIntoView({ block: 'center' }));
       const box = await target.boundingBox();
@@ -223,7 +240,7 @@ async function main() {
       await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
       equal(await page.evaluate(() => visualViewport.scale), 1, `Double tap keeps scale: ${selector}`);
     }
-    await page.locator('#in-weight').blur();
+    await page.locator('#in-note').blur();
     if (artifacts) {
       fs.mkdirSync(artifacts, { recursive: true });
       await open();
@@ -249,7 +266,7 @@ async function main() {
       await navigator.serviceWorker.ready;
       if (!navigator.serviceWorker.controller) await new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }));
     });
-    ok((await offlinePage.evaluate(() => caches.keys())).includes('sport-journal-v11'), 'Updated offline cache is installed');
+    ok((await offlinePage.evaluate(() => caches.keys())).includes('sport-journal-v12'), 'Updated offline cache is installed');
     await offlineContext.setOffline(true);
     await offlinePage.reload({ waitUntil: 'domcontentloaded' });
     await offlinePage.locator('#tabs [data-tab="today"]').tap();

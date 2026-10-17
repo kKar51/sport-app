@@ -346,6 +346,7 @@ async function main() {
       equal(await page.locator('#in-steps').inputValue(), '9200', 'Edit point opens the exact selected date');
       await choose(page, TODAY);
       equal(await page.locator('#in-weight').inputValue(), '80,7', 'Editing a historical point does not discard another date draft');
+      await page.locator('#tabs [data-tab="stats"]').tap();
       await page.locator('[data-act="exercise-history"][data-ex="sample"]').first().tap();
       equal(await page.locator('#ex-select').inputValue(), 'sample', 'Exercise result opens its own history');
       ok(await page.locator('#view svg').count() > 0, 'Recorded exercise history renders its graph');
