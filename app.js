@@ -49,7 +49,7 @@ function backupBeforeUpgrade(){
   catch(e){ backupError='Не удалось создать дополнительную копию на телефоне. Скачай копию данных в настройках.'; }
 }
 var DEFAULT_CFG={owner:'kKar51',repo:'sport',branch:'main',token:''};
-var DATA_RE=/^(program\.json|workouts\/\d{4}-\d{2}-\d{2}\.json|body\/\d{4}-\d{2}\.json|food\/\d{4}-\d{2}\.json|health\/\d{4}-\d{2}-\d{2}\.json|health\/auto\/\d{4}-\d{2}-\d{2}\.txt)$/;
+var DATA_RE=/^(program\.json|workouts\/\d{4}-\d{2}-\d{2}\.json|body\/\d{4}-\d{2}\.json|food\/\d{4}-\d{2}\.json|food\/estimates\/\d{4}-\d{2}\.json|health\/\d{4}-\d{2}-\d{2}\.json|health\/auto\/\d{4}-\d{2}-\d{2}\.txt)$/;
 var Store={cfg:Object.assign({},DEFAULT_CFG),files:{},pending:{},dailyDrafts:{},lastSync:0,lastPull:0,state:'idle',err:'',q:Promise.resolve(),timer:null,persistTimer:null,localErr:''};
 
 function persist(){
@@ -194,16 +194,17 @@ async function pull(){
 }
 
 /* ---------- app state ---------- */
-var S={program:null,workouts:{},body:{},food:{},health:{},tab:'overview',date:todayStr(),exSel:null,showMeasure:false,swapOpen:null,calendarMonth:null,returnTab:'overview',healthText:'',healthPreview:null,healthPreviewText:'',healthError:'',healthNotice:null,healthReadSequence:0,healthAuto:{},dailyMessage:{},progress:{kind:'weights',period:30,returnTab:'overview',returnDate:todayStr(),selected:null},strengthPeriod:30,strengthSelected:null};
+var S={program:null,workouts:{},body:{},food:{},health:{},tab:'overview',date:todayStr(),exSel:null,showMeasure:false,swapOpen:null,calendarMonth:null,returnTab:'overview',healthText:'',healthPreview:null,healthPreviewText:'',healthError:'',healthNotice:null,healthReadSequence:0,healthAuto:{},estimates:{},statsRange:'cycle',statsDaily:'steps',dailyMessage:{},progress:{kind:'weights',period:30,returnTab:'overview',returnDate:todayStr(),selected:null},strengthPeriod:30,strengthSelected:null};
 var TYPES=[['A','Верх A'],['L','Ноги'],['B','Верх B'],['run','Бег'],['rest','Отдых']];
 
 function rebuild(){
-  S.program=null; S.workouts={}; S.body={}; S.food={}; S.health={}; S.healthAuto={};
+  S.program=null; S.workouts={}; S.body={}; S.food={}; S.health={}; S.healthAuto={}; S.estimates={};
   Object.keys(Store.files).forEach(function(p){
     var d=Store.files[p].data;
     if(p==='program.json') S.program=d;
     else if(p.indexOf('workouts/')===0) S.workouts[p.slice(9,-5)]=d;
     else if(p.indexOf('body/')===0) S.body[p.slice(5,-5)]=d;
+    else if(p.indexOf('food/estimates/')===0) S.estimates[p.slice(15,-5)]=d;
     else if(p.indexOf('food/')===0) S.food[p.slice(5,-5)]=d;
     else if(p.indexOf('health/auto/')===0) S.healthAuto[p.slice(12,-4)]=autoHealth(d,p.slice(12,-4));
     else if(p.indexOf('health/')===0) S.health[p.slice(7,-5)]=d;
@@ -901,6 +902,104 @@ function renderHistory(){
   return h;
 }
 
+/* ---------- render: progress tab ---------- */
+var TYPE_MARK={A:'A',L:'Н',B:'B',run:'б'};
+function statsWidth(){ return progressWidth(); }
+function statsWeek(k){ var p=P(); var from=addDays(p.start,7*(k-1)); return {from:from,to:addDays(from,6)}; }
+function estimateDay(d){ var m=S.estimates[d.slice(0,7)],x=m&&m.days&&m.days[d]; return x&&x.total&&x.total.complete?x.total:null; }
+function statsGoals(k,plan,weeks){
+  var w=statsWeek(k),today=todayStr(),gym=0,run=0,steps=[],sleep=[],protein=[];
+  for(var d=w.from;d<=w.to;d=addDays(d,1)){
+    var wo=S.workouts[d];
+    if(d<=today&&SportStats.recorded(wo)){ if((wo.type||plannedType(d))==='run') run++; else if(['A','L','B'].indexOf(wo.type||plannedType(d))>=0) gym++; }
+    var st=bodyGet(d,'steps'),sl=bodyGet(d,'sleep'),e=estimateDay(d);
+    if(d<today&&st!=null) steps.push(st);
+    if(d<=today&&sl!=null) sleep.push(sl);
+    if(e&&typeof e.p==='number') protein.push(e.p);
+  }
+  var avg=function(a){ return a.length?a.reduce(function(s,x){return s+x;},0)/a.length:null; };
+  return SportStats.weekGoals({goals:(P().goals||{}).week,gym:gym,run:run,steps:avg(steps),sleep:avg(sleep),protein:avg(protein),weight:weeks[k-1]});
+}
+// Lifts listed in program goals; each keeps its own history, a substitute is a separate exercise.
+function strengthRows(){
+  var ids=((P().goals||{}).lifts)||['bench','squat','ohp'],rows=[];
+  ids.forEach(function(id){
+    var ex=findEx(id); if(!ex||ex.noWeight) return;
+    var pts=[];
+    sortedDates(false).filter(function(d){return d<=todayStr();}).forEach(function(d){
+      var e=filled(S.workouts[d].sets&&S.workouts[d].sets[id]).map(function(r){return {r:r,e:SportStats.e1rm(r.w,r.r)};}).filter(function(x){return x.e!=null;});
+      if(!e.length) return; e.sort(function(x,y){return y.e-x.e;}); pts.push({d:d,e:e[0].e,row:e[0].r});
+    });
+    if(pts.length) rows.push({ex:ex,points:pts});
+  });
+  return rows;
+}
+function renderStats(){
+  var p=P(),today=todayStr(),k=Math.max(1,Math.min(p.weeks,weekOf(today))),width=statsWidth();
+  var goal=(p.goals||{}).weight,plan=SportStats.weightPlan(goal,p.weeks),series=bodySeries('weights').filter(function(x){return x[0]<=today;});
+  var weeks=SportStats.weeklyAverages(series,plan),cur=weeks[k-1],next=plan[k];
+  var h='<div class="ses-head"><h2>Прогресс</h2><span>'+esc(p.title)+' · неделя '+k+' из '+p.weeks+'</span></div>';
+  if(plan.length){
+    var wk=statsWeek(k);
+    h+='<section class="st-sec" aria-labelledby="st-goals"><div class="st-head"><h3 id="st-goals">Цели недели</h3><span>'+esc(fmtShort(wk.from))+' – '+esc(fmtShort(wk.to))+'</span></div><div class="st-rings">'+statsGoals(k,plan,weeks).map(SportStats.ring).join('')+'</div>';
+    if(next) h+='<div class="st-target"><span>Вес к '+esc(fmtShort(next.to))+'</span><b>'+fmtN(next.target)+' кг <small>среднее за неделю</small></b><p>Коридор '+fmtN(next.low)+'–'+fmtN(next.high)+'.'+(cur&&cur.partial!=null?' Сейчас '+fmtN(Math.round(cur.partial*10)/10)+' — '+(cur.partial>cur.high?'выше коридора этой недели ('+fmtN(cur.low)+'–'+fmtN(cur.high)+').':cur.partial<cur.low?'ниже коридора этой недели: темп быстрее плана.':'в коридоре этой недели ('+fmtN(cur.low)+'–'+fmtN(cur.high)+').'):'')+'</p></div>';
+    h+='</section>';
+    var range=S.statsRange||'cycle';
+    h+='<section class="st-sec" aria-labelledby="st-weight"><div class="st-head"><h3 id="st-weight">Вес</h3><div class="st-seg" role="group" aria-label="Период графика веса">'+[['2w','2 недели'],['cycle','Цикл']].map(function(x){return '<button type="button" data-act="stats-range" data-range="'+x[0]+'" aria-pressed="'+(range===x[0])+'">'+x[1]+'</button>';}).join('')+'</div></div>';
+    h+='<div class="st-big"><b>'+(cur&&cur.partial!=null?fmtN(Math.round(cur.partial*10)/10)+' кг':'—')+'</b><span>среднее за неделю'+(cur&&cur.n?' · '+cur.n+' '+plural(cur.n,'замер','замера','замеров'):'')+(next?' · цель к '+esc(fmtShort(next.to))+': '+fmtN(next.target):'')+'</span></div>';
+    h+='<div id="stats-weight">'+SportStats.weightChart({width:width,plan:plan,series:series,today:today,range:range})+'</div>';
+    h+='<div class="st-legend"><span><i class="lg-trend"></i>среднее за 7 дней</span><span><i class="lg-dot"></i>утро</span><span><i class="lg-band"></i>коридор недели</span><span><i class="lg-plan"></i>план</span></div>';
+    h+='<button type="button" class="text-button" data-act="metric-open" data-metric="weights">Все замеры веса</button></section>';
+  }
+  // Consistency grid: every day of the cycle.
+  var grid='<span></span>'+['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(function(d){return '<span class="st-gh">'+d+'</span>';}).join(''),gyms=0,runs=0;
+  for(var w=1;w<=p.weeks;w++){
+    grid+='<span class="st-gh">'+w+'</span>';
+    for(var i=0;i<7;i++){
+      var d=addDays(p.start,7*(w-1)+i),st=SportStats.dayStatus(d,S.workouts[d],plannedType(d),today);
+      if(st.kind==='gym')gyms++; if(st.kind==='run')runs++;
+      grid+='<span class="st-cell '+st.kind+'" title="'+esc(fmtShort(d)+' · '+typeTitle(st.type))+'">'+(st.kind==='gym'||st.kind==='run'?esc(TYPE_MARK[st.type]||''):'')+'</span>';
+    }
+  }
+  h+='<section class="st-sec" aria-labelledby="st-grid"><div class="st-head"><h3 id="st-grid">Постоянство</h3><span>'+gyms+' '+plural(gyms,'зал','зала','залов')+' · '+runs+' '+plural(runs,'пробежка','пробежки','пробежек')+'</span></div><div class="st-grid" role="img" aria-label="Сетка цикла по дням">'+grid+'</div>'+
+    '<div class="st-legend"><span><i class="lg-gym"></i>зал</span><span><i class="lg-run"></i>бег</span><span><i class="lg-miss"></i>пропуск</span><span><i class="lg-plan2"></i>план</span></div></section>';
+  var lifts=strengthRows();
+  if(lifts.length){
+    h+='<section class="st-sec" aria-labelledby="st-str"><div class="st-head"><h3 id="st-str">Сила</h3><span>оценка 1ПМ, кг</span></div><div class="st-lifts">'+lifts.map(function(l){
+      var pts=l.points,last=pts[pts.length-1],first=pts[0];
+      return '<button type="button" class="st-lift" data-act="exercise-history" data-ex="'+esc(l.ex.id)+'"><span>'+esc(l.ex.name)+'<small>'+esc(fmtShort(last.d))+' · '+esc(setTxt(l.ex,last.row))+'</small></span>'+SportStats.spark(pts.map(function(x){return [x.d,x.e];}))+'<b>'+fmtN(Math.round(last.e))+(pts.length>1?'<small>'+esc(signed(last.e-first.e,''))+'</small>':'')+'</b></button>';
+    }).join('')+'</div><p class="small muted">1ПМ = вес × (1 + повторы / 30): так сравниваются подходы с разными весами. Подходы больше 15 повторов не учитываются.</p></section>';
+  }
+  var vol=sortedDates(false).filter(function(d){return d<=today;}).map(function(d){return {date:d,t:SportStats.tonnage(S.workouts[d].sets),label:typeTitle(S.workouts[d].type||plannedType(d))};}).filter(function(x){return x.t>0;});
+  if(vol.length) h+='<section class="st-sec" aria-labelledby="st-vol"><div class="st-head"><h3 id="st-vol">Объём</h3><span>вес × повторы за тренировку</span></div>'+SportStats.volumeChart({width:width,data:vol})+'</section>';
+  var kind=S.statsDaily||'steps',targets=progressTargets(),days=[];
+  for(var j=13;j>=0;j--){ var dd=addDays(today,-j); if(kind==='steps'&&dd===today) continue; days.push([dd,bodyGet(dd,kind)]); }
+  var any=days.some(function(x){return x[1]!=null;});
+  h+='<section class="st-sec" aria-labelledby="st-rec"><div class="st-head"><h3 id="st-rec">Восстановление</h3><div class="st-seg" role="group" aria-label="Показатель">'+[['steps','Шаги'],['sleep','Сон']].map(function(x){return '<button type="button" data-act="stats-daily" data-kind="'+x[0]+'" aria-pressed="'+(kind===x[0])+'">'+x[1]+'</button>';}).join('')+'</div></div>'+
+    (any?SportStats.barChart(kind==='steps'?{width:width,data:days,goal:targets.steps||8000,ticks:[0,10000,20000],tickLabel:function(v){return v/1000+'k';},valueLabel:thousands,label:'Шаги за 14 дней, цель '+(targets.steps||8000)}:{width:width,data:days,goal:(P().goals&&P().goals.week&&P().goals.week.sleep)||7,ticks:[0,3,6,9],tickLabel:function(v){return v+' ч';},valueLabel:function(v){return fmtN(Math.round(v*10)/10)+' ч';},label:'Сон за 14 ночей, цель 7 часов'}):'<p class="muted small">За 14 дней записей нет.</p>')+
+    '<button type="button" class="text-button" data-act="metric-open" data-metric="'+kind+'">Подробнее</button></section>';
+  // Nutrition: the latest week with reviewed days.
+  var n=NUT(),est=[];
+  for(var q=0;q<28;q++){ var ed=addDays(today,-q),e=estimateDay(ed); if(e) est.push([ed,e]); }
+  if(n&&est.length){
+    var lastDay=est[0][0],from=monday(lastDay),wk2=est.filter(function(x){return x[0]>=from&&x[0]<=addDays(from,6);});
+    if(wk2.length<3){ from=addDays(lastDay,-6); wk2=est.filter(function(x){return x[0]>=from;}); }
+    var kc=wk2.reduce(function(s,x){return s+x[1].k;},0)/wk2.length,pr=wk2.reduce(function(s,x){return s+x[1].p;},0)/wk2.length;
+    h+='<section class="st-sec" aria-labelledby="st-food"><div class="st-head"><h3 id="st-food">Питание</h3><span>разбор · '+esc(fmtShort(wk2[wk2.length-1][0]))+'–'+esc(fmtShort(wk2[0][0]))+'</span></div>'+
+      SportStats.foodBars({width:width,label:'Калории и белок в среднем за '+wk2.length+' дней',rows:[{name:'Ккал',value:kc,goal:n.targets.kcal,text:'~'+thousands(kc)+' / '+thousands(n.targets.kcal)},{name:'Белок',value:pr,goal:n.targets.protein,text:'~'+Math.round(pr)+' / '+n.targets.protein+' г'}]})+
+      '<p class="small muted">Оценка Claude по текстовым записям, '+wk2.length+' '+plural(wk2.length,'полный день','полных дня','полных дней')+'.</p></section>';
+  }
+  var height=p.goals&&p.goals.heightCm,waist=bodySeries('waist').filter(function(x){return x[0]<=today;}).slice(-1)[0];
+  if(height&&waist){
+    var r=waist[1]/height;
+    h+='<section class="st-sec" aria-labelledby="st-body"><div class="st-head"><h3 id="st-body">Талия / рост</h3><span>замер '+esc(fmtShort(waist[0]))+'</span></div><div class="st-big"><b>'+fmtN(Math.round(r*100)/100)+'</b><span>'+fmtN(waist[1])+' см / '+height+' см · сухой вид ниже 0,45 (талия '+Math.round(height*0.45)+' см)</span></div>'+
+      SportStats.gauge({width:width,value:r,min:0.4,max:0.6,good:0.45,ticks:[0.4,0.45,0.5,0.6]})+
+      '<p class="small muted">Талию меряем по воскресеньям утром. % жира появится после замера шеи вместе с фото.</p></section>';
+  }
+  h+='<div class="overview-more">'+overviewLink('history','История тренировок')+overviewLink('body','Вес и замеры')+overviewLink('program','Моя программа')+'</div>';
+  return h;
+}
+
 /* ---------- render: program ---------- */
 function renderProgram(){
   var p=P(),end=addDays(p.start,p.weeks*7-1);
@@ -1026,7 +1125,7 @@ function renderHealth(){
 /* ---------- render: settings ---------- */
 function renderSettings(){
   var c=Store.cfg,n=pendingCount();
-  var h='<div class="ses-head"><h2>Настройки</h2><span>Ночной лайм · версия 10</span></div>';
+  var h='<div class="ses-head"><h2>Настройки</h2><span>Ночной лайм · версия 11</span></div>';
   h+='<div class="panel"><h3>Apple Health</h3><p class="small muted mt8">Импорт сна и шагов из «Здоровья» через команду на iPhone. Ручные значения сохраняют приоритет.</p><div class="row mt8"><button class="btn" type="button" data-act="health-open">Импортировать сон и шаги</button><a class="text-button" href="health-setup.html" target="_blank" rel="noopener noreferrer">Инструкция</a></div></div>';
   h+='<div class="panel"><h3>Копия данных</h3><p class="small muted mt8">Все записи, включая ожидающие синхронизации. Токен доступа в файл не включается.</p><div class="row mt8"><button type="button" class="btn" data-act="download-backup">Скачать копию данных</button><button type="button" class="btn-ghost" data-act="download-upgrade-backup">Копия до обновления</button></div><p class="small muted mt8" id="backup-msg">'+esc(backupError)+'</p></div>';
   if(Store.state==='error'&&Store.err) h+='<div class="banner">'+esc(Store.err)+'</div>';
@@ -1094,6 +1193,7 @@ function render(){
   else if(S.tab==='body') out+=renderBody();
   else if(S.tab==='history') out+=renderHistory();
   else if(S.tab==='progress') out+=renderProgress();
+  else if(S.tab==='stats') out+=renderStats();
   else out+=renderProgram();
   view.innerHTML=out;
   paintMeters();
@@ -1130,6 +1230,8 @@ view.addEventListener('click',function(e){
     else{var kind=S.progress.kind;S.showMeasure=kind==='waist'||kind==='lower';navigate('overview',b.dataset.date);var input=document.getElementById(kind==='weights'?'in-weight':kind==='sleep'?'in-sleep-hours':'in-'+kind);if(input)input.focus({preventScroll:true});}
   }
   else if(act==='strength-mode'){S.strengthMode=b.dataset.mode;S.strengthSelected=null;render();}
+  else if(act==='stats-range'){S.statsRange=b.dataset.range;render();}
+  else if(act==='stats-daily'){S.statsDaily=b.dataset.kind;render();}
   else if(act==='exercise-history'){ S.exSel=b.dataset.ex; S.strengthSelected=null; navigate('history'); }
   else if(act==='download-backup'||act==='download-upgrade-backup') downloadBackup(act==='download-upgrade-backup');
   else if(act==='health-open') navigate('health');
@@ -1261,6 +1363,7 @@ if(!hasToken()&&!S.program) S.tab='settings';
 render();
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function(){});
 if('ResizeObserver' in window) new ResizeObserver(function(){
+  if(S.tab==='stats'){var sw=view.querySelector('svg.st-chart');if(sw&&Math.abs(sw.viewBox.baseVal.width-Math.max(260,progressWidth()))>1)render();return;}
   if(S.tab==='progress'||S.tab==='history'){var current=document.getElementById('progress-chart');if(current&&Math.abs(current.viewBox.baseVal.width-progressWidth())>1)redrawProgress();return;}
   if(S.tab!=='body') return;
   var chart=view.querySelector('svg.chart'); if(!chart) return;
