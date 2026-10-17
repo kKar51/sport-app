@@ -445,7 +445,7 @@ function uiIcon(name){
   var paths={left:'<path d="m14 6-6 6 6 6"/>',right:'<path d="m10 6 6 6-6 6"/>',calendar:'<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16"/>',back:'<path d="m10 5-7 7 7 7M3 12h18"/>',progress:'<path d="M4 4v16h16M8 15l4-5 4 2 4-6"/>'};
   return '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+(paths[name]||'')+'</svg>';
 }
-function navigate(tab,date){ persist(); S.tab=tab; if(date) S.date=date; S.calendarMonth=null; S.swapOpen=null; render(); window.scrollTo(0,0); }
+function navigate(tab,date){ persist(); S.finishOpen=false; S.tab=tab; if(date) S.date=date; S.calendarMonth=null; S.swapOpen=null; render(); window.scrollTo(0,0); }
 function overviewLink(tab,label){ return '<button class="overview-link" type="button" data-act="navigate" data-tab="'+tab+'"'+(tab==='body'?' data-date="'+todayStr()+'"':'')+'>'+esc(label)+'<span>Открыть</span></button>'; }
 function recordedWorkout(w){ return Object.keys(w.sets||{}).some(function(id){ return filled(w.sets[id]).length; })||!!(w.run&&(w.run.min>0||w.run.km>0)); }
 // Today screen: one date for the whole page, the plan, morning numbers, then what else is left to log.
@@ -610,39 +610,60 @@ function runBlock(d,w,wo){
     '</div><p class="small" id="run-pace">'+esc(paceText(r))+'</p>'+
     (run.note?'<p class="muted small">'+esc(run.note)+'</p>':'');
 }
+// Target for one set: the program's week plan while entering the cycle, otherwise double progression from the last session.
+function targetFor(ex,d,k,last){
+  var w=weekOf(d),ph=phaseOf(w).key,rg=range(ex.reps),lo=rg[0],hi=rg[1];
+  if(ex.start&&(ph==='intro'||ph==='pre')){
+    var t=ex.start[Math.max(0,Math.min(ex.start.length-1,(w<1?1:w)-1))],m=String(t).match(/(\d+(?:[.,]\d+)?)\s*кг\s*×\s*(\d+)/);
+    if(m) return {w:num(m[1]),r:+m[2]};
+  }
+  if(!last) return null;
+  var row=last.rows[k]||last.rows[last.rows.length-1],lw=maxW(last.rows),planned=plannedSets(ex,weekOf(last.date));
+  var top=last.rows.length>=planned&&last.rows.slice(0,planned).every(function(r){ return r.r>=hi; });
+  if(top&&ex.inc>0&&lw!=null&&!ex.noWeight&&!ex.bw) return {w:lw+ex.inc,r:lo};
+  if(ex.noWeight||ex.bw||lw==null) return {w:ex.noWeight?null:(row.w!=null?row.w:null),r:Math.min(hi,Math.max(lo,(row.r||lo)+(top?0:1)))};
+  // Weighted lifts hold the working weight; a lighter first set is a warm-up, not the target.
+  var atTop=last.rows.filter(function(r){ return r.w===lw; }).reduce(function(m,r){ return Math.max(m,r.r||0); },0);
+  return {w:lw,r:Math.min(hi,Math.max(lo,atTop+(top?0:1)))};
+}
+function targetTxt(ex,t){ if(!t) return ''; if(ex.noWeight||t.w==null) return t.r+' '+(ex.repsUnit||'повт.'); return (ex.bw?'+':'')+fmtN(t.w)+' '+(ex.unit||'кг')+' × '+t.r; }
+function restSeconds(text){ var m=String(text||'').match(/(\d+)/); if(!m) return 90; var n=+m[1]; return /мин/.test(text)?n*60:n; }
+function sessionCount(type,d,w,wo){
+  var ses=P().sessions[type],done=0,total=0; if(!ses) return {done:0,total:0};
+  ses.items.forEach(function(slot){ var ex=effEx(slot,slotChoice(slot,d)),n=Math.max(plannedSets(slot,w),((wo&&wo.sets&&wo.sets[ex.id])||[]).length); total+=n; done+=filled(wo&&wo.sets&&wo.sets[ex.id]).length; });
+  return {done:Math.min(done,total),total:total};
+}
 function sessionBlock(type,d,w,wo){
   var ses=P().sessions[type]; if(!ses) return '';
-  var h='<div class="ses-head"><h2>'+esc(ses.title)+'</h2>'+(ses.sub?'<span>'+esc(ses.sub)+'</span>':'')+'</div><ol class="exlist">';
+  var cnt=sessionCount(type,d,w,wo);
+  var h='<div class="ses-head"><h2>'+esc(ses.title)+'</h2>'+(ses.sub?'<span>'+esc(ses.sub)+'</span>':'')+'</div>'+
+    '<div class="wk-progress"><span id="wk-count">'+cnt.done+' из '+cnt.total+' подходов</span><progress id="wk-bar" max="'+cnt.total+'" value="'+cnt.done+'"></progress></div>'+
+    '<p class="small muted">Серые числа — цель на сегодня. ✓ — сделал так, и запустится отдых. Сделал иначе — впиши свои числа.</p><ol class="exlist">';
   ses.items.forEach(function(slot,i){
-    var ex=effEx(slot,slotChoice(slot,d));
-    var planned=plannedSets(slot,w);
-    var rows=(wo&&wo.sets&&wo.sets[ex.id])||[];
-    var n=Math.max(planned,rows.length);
-    var last=lastSession(ex.id,d);
-    var hn=hintFor(ex,d,last);
-    var ss=supersetNote(ses.items,i);
-    h+='<li class="ex"><div class="ex-top"><span class="ex-n">'+(i+1)+'</span><div class="ex-name"><h3>'+esc(ex.name)+'</h3>'+
+    var ex=effEx(slot,slotChoice(slot,d)),planned=plannedSets(slot,w),rows=(wo&&wo.sets&&wo.sets[ex.id])||[],n=Math.max(planned,rows.length);
+    var last=lastSession(ex.id,d),hn=hintFor(ex,d,last),ss=supersetNote(ses.items,i),t0=targetFor(ex,d,0,last),doneN=filled(rows).length;
+    h+='<li class="ex'+(doneN>=planned?' ex-done':'')+'"><div class="ex-top"><span class="ex-n">'+(i+1)+'</span><div class="ex-name"><h3>'+esc(ex.name)+'</h3>'+
       '<p class="target">'+planned+' × '+esc(dash(ex.reps))+(ex.repsUnit?' '+esc(ex.repsUnit):'')+(ex.perSide?' на сторону':'')+' · отдых '+esc(ex.rest)+'</p>'+
-      (ex.isAlt?'<p class="tag swapped">Замена вместо «'+esc(slot.name)+'»</p>':'')+
-      (ss?'<p class="tag">'+esc(ss)+'</p>':'')+'</div></div>';
-    if(ex.cue) h+='<p class="cue">'+esc(ex.cue)+'</p>';
-    if(hn.last) h+='<p class="last">'+esc(hn.last)+'</p>';
-    if(hn.advice) h+='<p class="hint '+hn.cls+'">'+esc(hn.advice)+'</p>';
+      (ex.isAlt?'<p class="tag swapped">Замена вместо «'+esc(slot.name)+'»</p>':'')+(ss?'<p class="tag">'+esc(ss)+'</p>':'')+'</div></div>';
+    if(t0) h+='<p class="goal"><b>Цель: '+esc(targetTxt(ex,t0))+'</b>'+(hn.cls==='up'?' · <span class="up">прибавка</span>':'')+'</p>';
+    else if(hn.advice) h+='<p class="goal"><b>'+esc(hn.advice)+'</b></p>';
+    if(last) h+='<p class="last">Прошлый раз, '+esc(fmtShort(last.date))+': '+esc(last.rows.map(function(r){ return setTxt(ex,r); }).join(' · '))+'</p>';
     h+='<div class="sets">';
     for(var k=0;k<n;k++){
-      var r=rows[k]||{};
-      var pr=last?(last.rows[k]||last.rows[last.rows.length-1]):null;
-      h+='<div class="set'+(ex.noWeight?' nw':'')+'"><span class="set-n">'+(k+1)+'</span>';
+      var r=rows[k]||{},tg=targetFor(ex,d,k,last)||{},done=r.r!=null&&r.r>0;
+      h+='<div class="set'+(ex.noWeight?' nw':'')+(done?' done':'')+'"><span class="set-n">'+(k+1)+'</span>';
       if(!ex.noWeight){
-        h+='<input class="cell" id="w-'+ex.id+'-'+k+'" data-ex="'+ex.id+'" data-slot="'+slot.id+'" data-i="'+k+'" data-f="w" inputmode="decimal" autocomplete="off" aria-label="'+esc(ex.name)+', подход '+(k+1)+', вес" value="'+esc(fmtN(r.w))+'" placeholder="'+esc(pr&&pr.w!=null?fmtN(pr.w):(ex.bw?'0':''))+'">'+
+        h+='<input class="cell" id="w-'+ex.id+'-'+k+'" data-ex="'+ex.id+'" data-slot="'+slot.id+'" data-i="'+k+'" data-f="w" inputmode="decimal" autocomplete="off" aria-label="'+esc(ex.name)+', подход '+(k+1)+', вес" value="'+esc(fmtN(r.w))+'" placeholder="'+esc(tg.w!=null?fmtN(tg.w):(ex.bw?'0':''))+'">'+
            '<span class="unit">'+esc(ex.unit||'кг')+' ×</span>';
       }
-      h+='<input class="cell" id="r-'+ex.id+'-'+k+'" data-ex="'+ex.id+'" data-slot="'+slot.id+'" data-i="'+k+'" data-f="r" inputmode="numeric" autocomplete="off" aria-label="'+esc(ex.name)+', подход '+(k+1)+', '+(ex.repsUnit==='с'?'секунды':'повторы')+'" value="'+esc(r.r==null?'':r.r)+'" placeholder="'+esc(pr?pr.r:'')+'">'+
-         '<span class="unit">'+esc(ex.repsUnit||'повт.')+'</span></div>';
+      h+='<input class="cell" id="r-'+ex.id+'-'+k+'" data-ex="'+ex.id+'" data-slot="'+slot.id+'" data-i="'+k+'" data-f="r" inputmode="numeric" autocomplete="off" aria-label="'+esc(ex.name)+', подход '+(k+1)+', '+(ex.repsUnit==='с'?'секунды':'повторы')+'" value="'+esc(r.r==null?'':r.r)+'" placeholder="'+esc(tg.r!=null?tg.r:'')+'">'+
+         '<span class="unit">'+esc(ex.repsUnit||'повт.')+'</span>'+
+         '<button class="set-ok" type="button" data-act="set-ok" data-ex="'+ex.id+'" data-slot="'+slot.id+'" data-i="'+k+'" data-rest="'+restSeconds(ex.rest)+'" aria-pressed="'+done+'" aria-label="'+esc(ex.name)+', подход '+(k+1)+': сделал'+(tg.r!=null?' '+esc(targetTxt(ex,tg)):'')+'"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg></button></div>';
     }
     var open=S.swapOpen===slot.id;
     h+='</div><div class="ex-foot"><button class="btn-ghost" type="button" data-act="addset" data-ex="'+ex.id+'" data-slot="'+slot.id+'" data-n="'+n+'">+ подход</button>'+
       ((slot.alts&&slot.alts.length)?'<button class="btn-ghost" type="button" data-act="swap-open" data-slot="'+slot.id+'" aria-expanded="'+open+'">'+(open?'Закрыть':'Заменить')+'</button>':'')+'</div>';
+    if(ex.cue) h+='<details class="cue-d"><summary>Как делать</summary><p class="cue">'+esc(ex.cue)+'</p></details>';
     if(open){
       var choices=[slot].concat(slot.alts);
       h+='<div class="opts swaps">'+choices.map(function(c){
@@ -654,8 +675,40 @@ function sessionBlock(type,d,w,wo){
   });
   h+='</ol>';
   if(ses.after) h+='<div class="panel after"><b>После тренировки.</b> '+esc(ses.after)+'</div>';
+  h+='<button class="btn" type="button" data-act="finish">'+(S.finishOpen?'Скрыть итог':'Закончить тренировку')+'</button>';
+  if(S.finishOpen) h+=finishSummary(type,d,w,wo);
   return h;
 }
+// Summary after the session: counts, tonnage and new estimated maxima against all earlier sessions.
+function finishSummary(type,d,w,wo){
+  var cnt=sessionCount(type,d,w,wo),tons=SportStats.tonnage(wo&&wo.sets),prs=[];
+  Object.keys((wo&&wo.sets)||{}).forEach(function(id){
+    var ex=findEx(id); if(!ex||ex.noWeight) return;
+    var best=function(rows){ return filled(rows).reduce(function(m,r){ var e=SportStats.e1rm(r.w,r.r); return e!=null&&e>m?e:m; },0); };
+    var now=best(wo.sets[id]),before=0;
+    sortedDates(false).forEach(function(x){ if(x<d){ var b=best(S.workouts[x].sets&&S.workouts[x].sets[id]); if(b>before) before=b; } });
+    if(now>0&&before>0&&now>before) prs.push(ex.name+': '+fmtN(Math.round(before))+' → '+fmtN(Math.round(now)));
+  });
+  var h='<section class="panel wk-summary" aria-label="Итог тренировки"><h3>Итог</h3><ul class="list"><li><span>Подходы</span><span>'+cnt.done+' из '+cnt.total+'</span></li><li><span>Объём</span><span>'+fmtN(Math.round(tons/100)/10)+' т</span></li></ul>';
+  h+=prs.length?'<p class="small"><b>Новые максимумы (оценка 1ПМ):</b> '+esc(prs.join(' · '))+'</p>':'<p class="small muted">Новых максимумов нет — для входной недели это нормально.</p>';
+  if(cnt.done<cnt.total) h+='<p class="small muted">Не все подходы записаны. Пропущенное не догоняем: следующая тренировка по графику.</p>';
+  return h+'<p class="small muted">Как прошло — запиши в заметке ниже.</p></section>';
+}
+// Rest timer lives outside the view so re-renders do not reset it.
+var restTimer={el:null,id:null,until:0};
+function startRest(sec){
+  if(!sec) return;
+  if(!restTimer.el){
+    restTimer.el=document.createElement('div'); restTimer.el.className='rest-timer'; restTimer.el.setAttribute('role','status');
+    restTimer.el.innerHTML='<span></span><button type="button">Пропустить</button>';
+    restTimer.el.querySelector('button').addEventListener('click',stopRest);
+    document.body.appendChild(restTimer.el);
+  }
+  restTimer.until=Date.now()+sec*1000; restTimer.el.hidden=false; clearInterval(restTimer.id);
+  var paint=function(){ var left=Math.max(0,Math.round((restTimer.until-Date.now())/1000)); restTimer.el.firstChild.textContent=left?'Отдых '+Math.floor(left/60)+':'+pad(left%60):'Отдых закончился'; if(!left){ clearInterval(restTimer.id); setTimeout(stopRest,4000); } };
+  paint(); restTimer.id=setInterval(paint,1000);
+}
+function stopRest(){ clearInterval(restTimer.id); if(restTimer.el) restTimer.el.hidden=true; }
 
 /* ---------- render: food ---------- */
 function NUT(){ var p=P(); return p&&p.nutrition; }
@@ -679,66 +732,70 @@ function bar(val,goal,label,unit){
   var pct=Math.max(0,Math.min(100,Math.round(val/goal*100)));
   return '<div class="meter"><div class="meter-top"><span>'+esc(label)+'</span><b>~'+fmtN(Math.round(val))+'</b><span class="muted"> / '+fmtN(goal)+' '+esc(unit)+'</span></div><div class="meter-track"><i class="'+(val>goal*1.1?'over':'')+'" data-w="'+pct+'"></i></div></div>';
 }
+// Food is logged as text; calories come from the weekly review, so the page never pretends a sum is complete.
+function mealWritten(m){ return !!(m&&m.opt&&(m.opt!=='other'||(m.text&&m.text.trim())||m.k!=null||m.p!=null)); }
+function foodSummary(d,day){
+  var n=NUT(),written=n.meals.filter(function(m){ return mealWritten(day&&day.meals[m.id]); }).length,est=estimateDay(d),tot=foodTotals(day),h='<div class="panel food-sum">';
+  h+='<div class="food-sum-row"><span>Записано</span><b>'+written+' из '+n.meals.length+' приёмов</b></div>';
+  if(est) h+='<div class="food-sum-row"><span>Оценка разбора</span><b>~'+thousands(est.k)+' ккал · ~'+Math.round(est.p)+' г белка</b></div><p class="small muted">Цель '+thousands(n.targets.kcal)+' ккал и '+n.targets.protein+' г белка.</p>';
+  else h+='<p class="small muted">Пиши, что и где ел. Калории и белок посчитает недельный разбор'+(tot.kcal>0?'; по известным числам пока учтено ~'+thousands(tot.kcal)+' ккал':'')+'.</p>';
+  return h+'</div>';
+}
+function yesterdayMeal(d,id){ var y=foodDay(addDays(d,-1),false),m=y&&y.meals[id]; return mealWritten(m)&&m.opt!=='skip'?m:null; }
+function mealText(meal,m){ if(!m||!m.opt) return ''; if(m.opt==='other') return m.text||''; if(m.opt==='skip') return 'не ел'; var o=mealOption(meal,m.opt); return o?o.text:''; }
 function renderFood(){
   var n=NUT(),d=S.date;
   var h=datebar(d);
   if(!n){ return h+'<div class="panel"><p class="muted small">План питания ещё не загружен. Он появится после синхронизации.</p></div>'; }
-  var day=foodDay(d,false),tot=foodTotals(day);
-  h+='<div class="panel nut-sum">'+bar(tot.kcal,n.targets.kcal,'Калории','ккал')+bar(tot.p,n.targets.protein,'Белок','г')+
-    '<p class="small muted" id="food-completeness">'+foodCompleteness(tot)+'</p></div>';
-  h+='<ol class="meals">';
+  var day=foodDay(d,false);
+  h+=foodSummary(d,day)+'<ol class="meals">';
   n.meals.forEach(function(meal){
-    var m=(day&&day.meals[meal.id])||{};
-    h+='<li class="meal"><div class="ses-head"><h3>'+esc(meal.title)+'</h3><span>'+esc(meal.time||'')+'</span></div>';
-    if(m.opt&&m.opt!=='other'&&m.opt!=='skip'){ var chosen=mealOption(meal,m.opt); if(chosen) h+='<p class="meal-selected">'+esc(chosen.text)+'</p>'; }
-    if(m.opt!=='other') h+='<div class="row"><button class="text-button" type="button" data-act="meal" data-meal="'+meal.id+'" data-opt="other">Записать, что ел</button></div>';
-    h+='<details class="meal-options"><summary>Варианты из программы'+(m.opt==='skip'?' · пропущено':'')+'</summary><div class="opts">';
+    var m=(day&&day.meals[meal.id])||{},y=yesterdayMeal(d,meal.id),plan=m.opt&&m.opt!=='other'&&m.opt!=='skip'?mealOption(meal,m.opt):null;
+    h+='<li class="meal'+(mealWritten(m)?' meal-done':'')+'"><div class="ses-head"><h3>'+esc(meal.title)+'</h3><span>'+esc(meal.time||'')+'</span></div>';
+    if(plan) h+='<p class="meal-selected">Из плана: '+esc(plan.text)+' <small>~'+plan.kcal+' ккал · '+plan.p+' г</small></p>';
+    if(m.opt==='skip') h+='<p class="meal-selected">Не ел</p>';
+    h+='<input class="txt" id="fo-t-'+meal.id+'" data-food="text" data-meal="'+meal.id+'" autocomplete="off" aria-label="'+esc(meal.title)+': что ел" value="'+esc(m.opt==='other'?(m.text||''):'')+'" placeholder="Что и где: «Братски, чевапчичи 300 г, морс»">';
+    h+='<div class="chips meal-chips">'+
+      (y?'<button class="chip" type="button" data-act="meal-copy" data-meal="'+meal.id+'">Как вчера: '+esc(cut(mealText(meal,y),28))+'</button>':'')+
+      '<button class="chip" type="button" data-act="meal" data-meal="'+meal.id+'" data-opt="skip" aria-pressed="'+(m.opt==='skip')+'">Не ел</button></div>';
+    h+='<details class="meal-options"><summary>Вариант из плана'+(m.opt==='other'?' · ккал и белок, если знаешь':'')+'</summary><div class="opts">';
     meal.options.forEach(function(o){
       h+='<button class="opt" type="button" data-act="meal" data-meal="'+meal.id+'" data-opt="'+o.id+'" aria-pressed="'+(m.opt===o.id)+'"><span>'+esc(o.text)+'</span><small>~'+o.kcal+' ккал · '+o.p+' г белка</small></button>';
     });
-    h+='<button class="text-button" type="button" data-act="meal" data-meal="'+meal.id+'" data-opt="skip" aria-pressed="'+(m.opt==='skip')+'">Пропустил</button></div></details>';
-    if(m.opt==='other'){
-      h+='<div class="other"><div class="field"><label for="fo-t-'+meal.id+'">Что съел</label><input class="txt" id="fo-t-'+meal.id+'" data-food="text" data-meal="'+meal.id+'" autocomplete="off" value="'+esc(m.text||'')+'" placeholder="например, пицца, 3 куска"></div>'+
-         '<div class="two"><div class="field"><label for="fo-k-'+meal.id+'">Ккал, если знаешь</label><input class="txt" id="fo-k-'+meal.id+'" data-food="k" data-meal="'+meal.id+'" inputmode="numeric" autocomplete="off" value="'+esc(m.k==null?'':m.k)+'"></div>'+
-         '<div class="field"><label for="fo-p-'+meal.id+'">Белок, г</label><input class="txt" id="fo-p-'+meal.id+'" data-food="p" data-meal="'+meal.id+'" inputmode="numeric" autocomplete="off" value="'+esc(m.p==null?'':m.p)+'"></div></div></div>';
-    }
-    h+='</li>';
+    h+='</div>';
+    if(m.opt==='other') h+='<div class="two mt8"><div class="field"><label for="fo-k-'+meal.id+'">Ккал</label><input class="txt" id="fo-k-'+meal.id+'" data-food="k" data-meal="'+meal.id+'" inputmode="numeric" autocomplete="off" value="'+esc(m.k==null?'':m.k)+'"></div>'+
+      '<div class="field"><label for="fo-p-'+meal.id+'">Белок, г</label><input class="txt" id="fo-p-'+meal.id+'" data-food="p" data-meal="'+meal.id+'" inputmode="numeric" autocomplete="off" value="'+esc(m.p==null?'':m.p)+'"></div></div>';
+    h+='</details></li>';
   });
   h+='</ol>';
   var ex=(day&&day.extra)||[];
-  h+='<div class="panel"><div class="ses-head"><h3>Ещё что-то съел</h3><span>перекусы, напитки, всё вне плана</span></div>';
+  h+='<div class="panel"><div class="ses-head"><h3>Ещё что-то</h3><span>перекус, кофе, напиток</span></div>';
   if(ex.length){
     h+='<ul class="extra">'+ex.map(function(x,i){
       var meta=[x.k!=null?'~'+x.k+' ккал':'',x.p!=null?x.p+' г белка':''].filter(Boolean).join(' · ');
       return '<li><span class="x-text">'+esc(x.text)+(meta?'<small>'+esc(meta)+'</small>':'')+'</span><button class="x-del" type="button" data-act="extra-del" data-i="'+i+'" aria-label="Удалить: '+esc(x.text)+'">×</button></li>';
     }).join('')+'</ul>';
   }
-  h+='<div class="other mt8"><div class="field"><label for="ex-text">Что съел</label><input class="txt" id="ex-text" autocomplete="off" placeholder="например, капучино 300 мл и банан"></div>'+
-     '<div class="two"><div class="field"><label for="ex-k">Ккал, если знаешь</label><input class="txt" id="ex-k" inputmode="numeric" autocomplete="off"></div>'+
-     '<div class="field"><label for="ex-p">Белок, г</label><input class="txt" id="ex-p" inputmode="numeric" autocomplete="off"></div></div>'+
-     '<div class="row"><button class="btn" type="button" data-act="extra-add">Добавить</button></div></div>'+
-     '<p class="small muted mt8">Пиши блюдо, граммы или название кафе. Неизвестные калории и белок сохраняются как пропуски и не входят в итог.</p></div>';
+  h+='<div class="extra-add"><input class="txt" id="ex-text" autocomplete="off" aria-label="Что ещё съел" placeholder="Капучино 300 мл и банан"><button class="btn" type="button" data-act="extra-add">Добавить</button></div>'+
+     '<details class="meal-options"><summary>Ккал и белок, если знаешь</summary><div class="two mt8"><div class="field"><label for="ex-k">Ккал</label><input class="txt" id="ex-k" inputmode="numeric" autocomplete="off"></div>'+
+     '<div class="field"><label for="ex-p">Белок, г</label><input class="txt" id="ex-p" inputmode="numeric" autocomplete="off"></div></div></details></div>';
   var sw=day&&day.sweets;
   h+='<div class="panel"><div class="ses-head"><h3>Сладкое</h3><span>'+esc(n.sweets.limit||'')+'</span></div><div class="row mt8">'+
-    [['none','Не было'],['plan','По плану'],['over','Больше плана']].map(function(x){ return '<button class="chip" type="button" data-act="sweets" data-val="'+x[0]+'" aria-pressed="'+(sw===x[0])+'">'+x[1]+'</button>'; }).join('')+
-    '</div>'+(n.sweets.hint?'<p class="small muted mt8">'+esc(n.sweets.hint)+'</p>':'')+'</div>';
-  h+='<div class="panel"><div class="ses-head"><h3>Добавки</h3><span>отметь, что принял</span></div><ul class="supps">';
-  n.supplements.forEach(function(s){
-    var on=!!(day&&day.supp[s.id]);
-    h+='<li><button class="check" type="button" data-act="supp" data-id="'+s.id+'" aria-pressed="'+on+'"><span class="box" aria-hidden="true"></span><span class="s-main"><b>'+esc(s.name)+'</b> · '+esc(s.dose)+(s.optional?' <em>по желанию</em>':'')+'<span class="s-when">'+esc(s.when)+'</span></span></button>'+
-      (s.note?'<details><summary>Подробнее</summary><p class="small muted">'+esc(s.note)+'</p></details>':'')+'</li>';
-  });
-  h+='</ul></div>';
-  // last 7 days
+    [['none','Не было'],['plan','По плану'],['over','Больше плана']].map(function(x){ return '<button class="chip" type="button" data-act="sweets" data-val="'+x[0]+'" aria-pressed="'+(sw===x[0])+'">'+x[1]+'</button>'; }).join('')+'</div></div>';
+  h+='<div class="panel"><div class="ses-head"><h3>Добавки</h3><span>нажми, что принял</span></div><div class="chips mt8 supp-chips">'+n.supplements.map(function(s){
+    return '<button class="chip" type="button" data-act="supp" data-id="'+s.id+'" aria-pressed="'+!!(day&&day.supp[s.id])+'" title="'+esc(s.dose+' · '+s.when)+'">'+esc(s.name.split(' ')[0]==='Витамин'?s.name.replace('Витамин ',''):s.name.split(' ')[0])+'</button>';
+  }).join('')+'</div><details class="meal-options"><summary>Дозы и время</summary><ul class="list">'+n.supplements.map(function(s){return '<li><span>'+esc(s.name)+'</span><span>'+esc(s.dose+' · '+s.when)+'</span></li>';}).join('')+'</ul></details></div>';
+  // Last 7 days: how many meals were written, with the review estimate where it exists.
   h+='<p class="sec">Неделя</p><div class="panel"><div class="week7">';
   for(var i=6;i>=0;i--){
-    var dd=addDays(d,-i),dy=foodDay(dd,false),tt=foodTotals(dy);
-    var cls=!dy||!tt.marked?'none':tt.onPlan>=tt.total?'full':tt.onPlan>=tt.total-1?'most':'low';
-    h+='<div class="w7 '+cls+'"><span>'+esc(fmtShortI.format(parseYmd(dd)).replace('.',''))+'</span><b>'+(dy&&tt.marked?tt.onPlan+'/'+tt.total:'—')+'</b><small>'+(dy&&dy.sweets==='over'?'сладкое':' ')+'</small></div>';
+    var dd=addDays(d,-i),dy=foodDay(dd,false),wr=n.meals.filter(function(m){ return mealWritten(dy&&dy.meals[m.id]); }).length,e=estimateDay(dd);
+    var cls=!wr?'none':wr>=n.meals.length?'full':wr>=n.meals.length-1?'most':'low';
+    h+='<div class="w7 '+cls+'"><span>'+esc(fmtShortI.format(parseYmd(dd)).replace('.',''))+'</span><b>'+(wr?wr+'/'+n.meals.length:'—')+'</b><small>'+(e?thousands(e.k):dy&&dy.sweets==='over'?'сладкое':' ')+'</small></div>';
   }
-  h+='</div></div>';
+  h+='</div><p class="small muted mt8">Сверху — записанные приёмы, снизу — ккал из разбора.</p></div>';
   return h;
 }
+function cut(s,n){ s=String(s||''); return s.length>n?s.slice(0,n-1)+'…':s; }
 function paintMeters(){ Array.prototype.forEach.call(view.querySelectorAll('.meter-track i[data-w]'),function(el){ el.style.width=el.getAttribute('data-w')+'%'; }); }
 function foodCompleteness(tot){ return (tot.unknown||tot.unknownP)?'Итог неполный · без калорий: '+tot.unknown+' · без белка: '+tot.unknownP:'Сумма внесённых значений. Неотмеченные приёмы пищи не учтены.'; }
 
@@ -1161,7 +1218,7 @@ function renderHealth(){
 /* ---------- render: settings ---------- */
 function renderSettings(){
   var c=Store.cfg,n=pendingCount();
-  var h='<div class="ses-head"><h2>Настройки</h2><span>Ночной лайм · версия 12</span></div>';
+  var h='<div class="ses-head"><h2>Настройки</h2><span>Ночной лайм · версия 13</span></div>';
   h+='<div class="panel"><h3>Apple Health</h3><p class="small muted mt8">Импорт сна и шагов из «Здоровья» через команду на iPhone. Ручные значения сохраняют приоритет.</p><div class="row mt8"><button class="btn" type="button" data-act="health-open">Импортировать сон и шаги</button><a class="text-button" href="health-setup.html" target="_blank" rel="noopener noreferrer">Инструкция</a></div></div>';
   h+='<div class="panel"><h3>Копия данных</h3><p class="small muted mt8">Все записи, включая ожидающие синхронизации. Токен доступа в файл не включается.</p><div class="row mt8"><button type="button" class="btn" data-act="download-backup">Скачать копию данных</button><button type="button" class="btn-ghost" data-act="download-upgrade-backup">Копия до обновления</button></div><p class="small muted mt8" id="backup-msg">'+esc(backupError)+'</p></div>';
   if(Store.state==='error'&&Store.err) h+='<div class="banner">'+esc(Store.err)+'</div>';
@@ -1266,6 +1323,24 @@ view.addEventListener('click',function(e){
     else{var kind=S.progress.kind;S.showMeasure=kind==='waist'||kind==='lower';navigate('overview',b.dataset.date);var input=document.getElementById(kind==='weights'?'in-weight':kind==='sleep'?'in-sleep-hours':'in-'+kind);if(input)input.focus({preventScroll:true});}
   }
   else if(act==='strength-mode'){S.strengthMode=b.dataset.mode;S.strengthSelected=null;render();}
+  else if(act==='set-ok'){
+    var so=getW(S.date,true),sid=b.dataset.ex,si=+b.dataset.i,sex=findEx(sid);
+    if(b.dataset.slot){ so.swaps=so.swaps||{}; so.swaps[b.dataset.slot]=sid; }
+    var srows=so.sets[sid]||(so.sets[sid]=[]); while(srows.length<=si) srows.push({w:null,r:null});
+    if(!(srows[si].r>0)){
+      var wi=document.getElementById('w-'+sid+'-'+si),ri=document.getElementById('r-'+sid+'-'+si);
+      var sr=int(ri&&ri.value); if(sr==null) sr=int(ri&&ri.placeholder);
+      if(!sr){ if(ri) ri.focus(); return; }
+      var sw=sex&&sex.noWeight?null:num(wi&&wi.value); if(sw==null&&!(sex&&sex.noWeight)) sw=num(wi&&wi.placeholder);
+      srows[si]=Object.assign({},srows[si],{w:sw,r:sr}); touchPath('workouts/'+S.date+'.json');
+    }
+    render(); startRest(+b.dataset.rest);
+  }
+  else if(act==='finish'){ S.finishOpen=!S.finishOpen; render(); }
+  else if(act==='meal-copy'){
+    var yc=yesterdayMeal(S.date,b.dataset.meal); if(!yc) return;
+    var fc=foodDay(S.date,true); fc.meals[b.dataset.meal]=JSON.parse(JSON.stringify(yc)); touchFood(S.date); render();
+  }
   else if(act==='pick-day'){ persist(); S.date=b.dataset.date; S.showMeasure=false; S.calendarMonth=null; render(); }
   else if(act==='mood'){ var mv=Number(b.dataset.n); bodySet(S.date,'mood',bodyManual(S.date,'mood')===mv?null:mv); touchPath('body/'+S.date.slice(0,7)+'.json'); render(); }
   else if(act==='stats-range'){S.statsRange=b.dataset.range;render();}
@@ -1350,6 +1425,9 @@ view.addEventListener('input',function(e){
     var row=Object.assign({},rows[i],{w:rows[i].w==null?null:rows[i].w,r:rows[i].r==null?null:rows[i].r});
     row[t.dataset.f]=t.dataset.f==='r'?int(t.value):num(t.value);
     rows[i]=row; touchPath('workouts/'+S.date+'.json');
+    var setEl=t.closest('.set'); if(setEl) setEl.classList.toggle('done',row.r!=null&&row.r>0);
+    var cnt=sessionCount(wo.type||plannedType(S.date),S.date,weekOf(S.date),wo),wc=document.getElementById('wk-count'),wb=document.getElementById('wk-bar');
+    if(wc) wc.textContent=cnt.done+' из '+cnt.total+' подходов'; if(wb){ wb.max=cnt.total; wb.value=cnt.done; }
   } else if(t.dataset.run){
     var w2=getW(S.date,true); w2.run[t.dataset.run]=num(t.value); touchPath('workouts/'+S.date+'.json');
     var pe=document.getElementById('run-pace'); if(pe) pe.textContent=paceText(w2.run);
@@ -1359,14 +1437,13 @@ view.addEventListener('input',function(e){
     bodySet(S.date,t.dataset.body,t.dataset.int?int(t.value):num(t.value)); touchPath('body/'+S.date.slice(0,7)+'.json');
     paintHealthProvenance(S.date,t.dataset.body);
   } else if(t.dataset.food){
-    var fd=foodDay(S.date,true),m=fd.meals[t.dataset.meal]||(fd.meals[t.dataset.meal]={opt:'other'});
+    // Typing a meal makes it a free-text entry; clearing everything removes it again.
+    var fd=foodDay(S.date,true),mid=t.dataset.meal,m=fd.meals[mid];
+    if(!m||m.opt!=='other') m=fd.meals[mid]={opt:'other',text:'',k:null,p:null};
     if(t.dataset.food==='text') m.text=t.value; else m[t.dataset.food]=int(t.value);
+    if(!(m.text&&m.text.trim())&&m.k==null&&m.p==null) delete fd.meals[mid];
     touchFood(S.date);
-    var tot=foodTotals(fd),bars=view.querySelectorAll('.nut-sum .meter');
-    if(bars.length===2){ bars[0].outerHTML=bar(tot.kcal,NUT().targets.kcal,'Калории','ккал'); }
-    bars=view.querySelectorAll('.nut-sum .meter'); if(bars.length===2){ bars[1].outerHTML=bar(tot.p,NUT().targets.protein,'Белок','г'); }
-    var completeness=document.getElementById('food-completeness'); if(completeness) completeness.textContent=foodCompleteness(tot);
-    paintMeters();
+    var li=t.closest('.meal'); if(li) li.classList.toggle('meal-done',!!fd.meals[mid]);
   }
 });
 view.addEventListener('change',function(e){ if(e.target.id==='ex-select'){ S.exSel=e.target.value;S.strengthSelected=null;render(); } });
