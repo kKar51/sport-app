@@ -218,11 +218,11 @@ async function main() {
     await page.waitForTimeout(400);
     equal((await store()).files['workouts/2026-10-13.json'].data.sets.sample[0], { w: 50, r: 11 }, 'Check saves the target as done');
     ok(await page.locator('.rest-timer').isVisible(), 'Rest timer starts after a set');
-    await page.locator('.rest-timer button').tap();
+    await page.locator('.rest-timer [data-rest-skip]').tap();
     ok(!(await page.locator('.rest-timer').isVisible()), 'Rest timer can be skipped');
     await page.locator('[data-act="set-ok"][data-ex="sample"][data-i="0"]').tap();
     equal((await store()).files['workouts/2026-10-13.json'].data.sets.sample[0], { w: 50, r: 11 }, 'Second check keeps the logged set');
-    await page.locator('.rest-timer button').tap();
+    await page.locator('.rest-timer [data-rest-skip]').tap();
     await page.locator('[data-act="finish"]').tap();
     ok((await page.locator('.wk-summary').innerText()).includes('1 из'), 'Finish shows the session summary');
     await tab('food');
@@ -294,7 +294,7 @@ async function main() {
       await navigator.serviceWorker.ready;
       if (!navigator.serviceWorker.controller) await new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }));
     });
-    ok((await offlinePage.evaluate(() => caches.keys())).includes('sport-journal-v13'), 'Updated offline cache is installed');
+    ok((await offlinePage.evaluate(() => caches.keys())).includes('sport-journal-v14'), 'Updated offline cache is installed');
     await offlineContext.setOffline(true);
     await offlinePage.reload({ waitUntil: 'domcontentloaded' });
     await offlinePage.locator('#tabs [data-tab="today"]').tap();
