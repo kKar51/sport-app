@@ -11,6 +11,7 @@ PWA без сборки и зависимостей: открывается с �
 | `muscles.js` | Каталог упражнение → мышцы (1 / ½) и инвентарь, правила по названию, грифы и раскладка блинов, зоны объёма 4/10/20 |
 | `progress.js`, `progress-view.js` | Модель и график страниц отдельной метрики (вес, сон, шаги, замеры, упражнение) |
 | `health.js` | Разбор импорта Apple Health (`SPORT_HEALTH_V1`) |
+| `reviews.js`, `reviews.css` | Приватные Markdown-разборы: допустимые пути, безопасное отображение, список и оформление |
 | `sw.js` | Офлайн-кеш оболочки, network-first |
 | `health-setup.html` | Инструкция по команде iPhone |
 
@@ -27,6 +28,7 @@ PWA без сборки и зависимостей: открывается с �
 | render: food | `renderFood`, `foodTotals` |
 | render: progress tab | `weightModel`, `weightCard`, `strengthRows`, `volumeSection`, `renderStats` |
 | render: root / events | `render()`, `paintMeters`, `paintStagger`, один обработчик кликов по `data-act` |
+| render: reviews | `renderReviews`, `review-open`, `review-list`; тексты только читаются из `Store.files` |
 
 ## Правила кода
 
@@ -34,6 +36,7 @@ PWA без сборки и зависимостей: открывается с �
 - **CSP запрещает инлайн-стили** (`style="…"` в разметке блокируется). Динамику — через `data-*` и CSSOM после `render()` (`paintMeters`, `paintStagger`).
 - Пропуск — не ноль: неизвестное значение не рисуется и не входит в среднее.
 - Схема JSON и ключ `localStorage` `sport-journal.v1` не меняются без миграции и теста сохранности.
+- Markdown из `weekly/`, `food/reviews/` и приватной `docs/training-guide.md` загружается через авторизованный pull в обёртке `sport-review.markdown`. В `rebuild()` эти пути пропускаются: они не являются месячной едой. Тексты не публиковать вместе с кодом и не отправлять через `touchPath`/`pushAll`.
 - Комментарии — короткие, по-английски, объясняют «почему».
 
 ## Выпуск версии
@@ -43,5 +46,6 @@ PWA без сборки и зависимостей: открывается с �
 ## Тесты
 
 - Быстрые: `node tests/stats-unit.cjs`, `node tests/progress-unit.cjs`.
+- Разборы: `node tests/reviews-unit.cjs`, `node tests/reviews.cjs` (синтетические тексты, приватность и чтение без записи).
 - Браузерные (`mobile`, `daily-progress`, `health`, `data-preservation`): Playwright с системным Chrome (`channel: 'chrome'`), путь к пакету — через `NODE_PATH`. Данные синтетические.
-- `tests/data-preservation.cjs` падает и на версии 13 («Read-only navigation/download never writes to the mock remote») — известная проблема, не от новых правок.
+- Исторически у `tests/data-preservation.cjs` отмечалось падение «Read-only navigation/download never writes to the mock remote». На изолированной baseline v14 от 01.11.2026 оно не воспроизвелось (38 PASS; с переходом v13→v14 — 48 PASS). Старое падение не является основанием игнорировать новый FAIL.

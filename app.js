@@ -129,6 +129,7 @@ function enqueue(fn){
 function schedulePush(ms){ clearTimeout(Store.timer); Store.timer=setTimeout(function(){ enqueue(pushAll); },ms==null?15000:ms); }
 function syncNow(){ clearTimeout(Store.timer); return enqueue(function(){ return pull().then(pushAll); }); }
 function touchPath(path){
+  if(SportReviews.isPath(path)) return;
   var f=Store.files[path]; if(!f) return;
   f.data.updatedAt=new Date().toISOString();
   Store.pending[path]=1; persistSoon(); paintSync();
@@ -153,7 +154,7 @@ async function putFile(path,text,sha){
 async function pushAll(){
   if(!hasToken()||!pendingCount()){ if(Store.state!=='error') paintSync(); return; }
   setState('pushing');
-  var paths=Object.keys(Store.pending);
+  var paths=Object.keys(Store.pending).filter(function(p){return !SportReviews.isPath(p);});
   for(var i=0;i<paths.length;i++){
     var p=paths[i],f=Store.files[p];
     if(!f){ delete Store.pending[p]; continue; }
@@ -173,7 +174,7 @@ async function pull(){
   var remote={};
   if(res.status===409){ /* empty repository */ }
   else if(!res.ok) throw httpErr(res);
-  else { var j=await res.json(); (j.tree||[]).forEach(function(t){ if(t.type==='blob'&&DATA_RE.test(t.path)) remote[t.path]=t.sha; }); }
+  else { var j=await res.json(); (j.tree||[]).forEach(function(t){ if(t.type==='blob'&&(DATA_RE.test(t.path)||SportReviews.isPath(t.path))) remote[t.path]=t.sha; }); }
   var paths=Object.keys(remote);
   for(var i=0;i<paths.length;i++){
     var p=paths[i],sha=remote[p],f=Store.files[p];
@@ -183,7 +184,7 @@ async function pull(){
     if(!b.ok) throw httpErr(b);
     var bj=await b.json(),data;
     // The iPhone shortcut uploads its plain SPORT_HEALTH_V1 text; the journal only reads it.
-    try{ data=/\.txt$/.test(p)?{format:'sport-health.auto.text',text:b64dec(bj.content)}:JSON.parse(b64dec(bj.content)); }catch(e){ continue; }
+    try{ data=SportReviews.isPath(p)?SportReviews.decode(b64dec(bj.content)):/\.txt$/.test(p)?{format:'sport-health.auto.text',text:b64dec(bj.content)}:JSON.parse(b64dec(bj.content)); }catch(e){ continue; }
     // An input event may have changed this file while the blob was downloading.
     if(Store.pending[p]||Store.files[p]!==f) continue;
     Store.files[p]={sha:sha,data:data};
@@ -200,6 +201,7 @@ var TYPES=[['A','Верх A'],['L','Ноги'],['B','Верх B'],['run','Бег
 function rebuild(){
   S.program=null; S.workouts={}; S.body={}; S.food={}; S.health={}; S.healthAuto={}; S.estimates={};
   Object.keys(Store.files).forEach(function(p){
+    if(SportReviews.isPath(p)) return;
     var d=Store.files[p].data;
     if(p==='program.json') S.program=d;
     else if(p.indexOf('workouts/')===0) S.workouts[p.slice(9,-5)]=d;
@@ -507,7 +509,7 @@ function renderOverview(){
   var h=datebar(d)+weekStrip(d)+planCard(d);
   h+=renderDailyPanel()+moodRow(d)+todoRows(d)+weekTeaser();
   if(!hasToken()&&pendingCount()) h+='<p class="small muted">Записи сохранены в этом телефоне. Для резервной копии подключи GitHub в настройках.</p>';
-  h+='<div class="overview-more">'+overviewLink('body','Вес и замеры')+overviewLink('history','История тренировок')+overviewLink('program','Моя программа')+'</div>';
+  h+='<div class="overview-more">'+overviewLink('reviews','Разборы и рекомендации')+overviewLink('body','Вес и замеры')+overviewLink('history','История тренировок')+overviewLink('program','Моя программа')+'</div>';
   return h;
 }
 
@@ -1314,7 +1316,7 @@ function renderHealth(){
 /* ---------- render: settings ---------- */
 function renderSettings(){
   var c=Store.cfg,n=pendingCount();
-  var h='<div class="ses-head"><h2>Настройки</h2><span>Ночной лайм · версия 14</span></div>';
+  var h='<div class="ses-head"><h2>Настройки</h2><span>Ночной лайм · версия 15</span></div>';
   h+='<div class="panel"><h3>Apple Health</h3><p class="small muted mt8">Импорт сна и шагов из «Здоровья» через команду на iPhone. Ручные значения сохраняют приоритет.</p><div class="row mt8"><button class="btn" type="button" data-act="health-open">Импортировать сон и шаги</button><a class="text-button" href="health-setup.html" target="_blank" rel="noopener noreferrer">Инструкция</a></div></div>';
   h+='<div class="panel"><h3>Копия данных</h3><p class="small muted mt8">Все записи, включая ожидающие синхронизации. Токен доступа в файл не включается.</p><div class="row mt8"><button type="button" class="btn" data-act="download-backup">Скачать копию данных</button><button type="button" class="btn-ghost" data-act="download-upgrade-backup">Копия до обновления</button></div><p class="small muted mt8" id="backup-msg">'+esc(backupError)+'</p></div>';
   if(Store.state==='error'&&Store.err) h+='<div class="banner">'+esc(Store.err)+'</div>';
@@ -1361,10 +1363,24 @@ function copyData(){
 }
 
 /* ---------- render: root ---------- */
+function renderReviews(){
+  var path=S.reviewPath,article=path&&SportReviews.isPath(path)&&SportReviews.article(Store.files[path],path);
+  if(path){
+    var back='<button type="button" class="back-link" data-act="review-list">'+uiIcon('back')+'Все разборы</button>';
+    if(!article)return back+'<div class="empty"><b>Разбор пока не загружен</b>Подключись к сети и нажми «Обновить разборы».<div class="mt12"><button class="btn" type="button" data-act="sync">Обновить разборы</button></div></div>';
+    return back+'<article class="review-article"><span class="review-kind">'+esc(article.kind)+'</span><h2 class="review-title" tabindex="-1">'+esc(article.title)+'</h2>'+article.html+'</article>';
+  }
+  var items=SportReviews.list(Store.files),h='<section class="reviews-head"><h2 tabindex="-1" id="reviews-title">Разборы</h2><p>Итоги недели, питание и рекомендации. Загруженные тексты можно читать без сети.</p></section>';
+  if(!items.length)h+='<div class="empty"><b>Разборов пока нет</b>'+(hasToken()?'Новые письма появятся здесь после синхронизации.':'Подключи GitHub в настройках, чтобы загрузить разборы из своего журнала.')+'</div>';
+  else h+='<ol class="review-list">'+items.map(function(item){return '<li><button type="button" class="review-card" data-act="review-open" data-path="'+esc(item.path)+'"><small>'+esc(item.kind)+'</small><b>'+esc(item.title)+'</b><span>Читать →</span></button></li>';}).join('')+'</ol>';
+  h+='<div class="review-sync"><button class="btn-ghost" type="button" data-act="'+(hasToken()?'sync':'open-settings')+'">'+(hasToken()?'Обновить разборы':'Подключить GitHub')+'</button></div>';
+  return h;
+}
 function render(){
   renderHeader(); paintTabs(); paintSync();
   if(S.tab==='settings'){ view.innerHTML=renderSettings(); return; }
   if(S.tab==='health'){ view.innerHTML=renderHealth(); return; }
+  if(S.tab==='reviews'){ view.innerHTML=renderReviews(); return; }
   if(!P()){
     var h;
     if(!hasToken()) h='<div class="empty"><b>Подключи GitHub</b>Программа и записи хранятся в твоём приватном репозитории. Один раз вставь токен, и журнал загрузится.<div class="mt12"><button class="btn" type="button" data-act="open-settings">Открыть настройки</button></div></div>';
@@ -1416,6 +1432,8 @@ view.addEventListener('click',function(e){
   var b=e.target.closest('[data-act]'); if(!b||b.disabled) return;
   var act=b.dataset.act;
   if(act==='navigate') navigate(b.dataset.tab,b.dataset.date);
+  else if(act==='review-open'){if(!SportReviews.isPath(b.dataset.path))return;var anchor=b.dataset.anchor;S.reviewPath=b.dataset.path;navigate('reviews');var rt=anchor&&document.getElementById('review-heading-'+anchor);if(rt){rt.focus({preventScroll:true});rt.scrollIntoView();}else{rt=view.querySelector('.review-title');if(rt)rt.focus({preventScroll:true});}}
+  else if(act==='review-list'){S.reviewPath=null;render();window.scrollTo(0,0);var rl=document.getElementById('reviews-title');if(rl)rl.focus({preventScroll:true});}
   else if(act==='daily-save') saveDaily();
   else if(act==='daily-cancel'){delete Store.dailyDrafts[S.date];delete S.dailyMessage[S.date];persist();render();}
   else if(act==='metric-open'){if(!PROGRESS_INFO[b.dataset.metric])return;S.progress={kind:b.dataset.metric,period:30,returnTab:S.tab,returnDate:S.date,selected:null};navigate('progress');}

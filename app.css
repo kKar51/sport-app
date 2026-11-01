@@ -322,7 +322,7 @@ select{background:var(--bg)}
 .check .box{border-radius:50%}
 .x-del{min-width:44px;min-height:44px;border:0;background:none}
 .tabs{background:var(--bg)}
-.tabs-in{grid-template-columns:repeat(4,minmax(0,1fr));padding:7px 12px 9px}
+.tabs-in{grid-template-columns:repeat(5,minmax(0,1fr));padding:7px 12px 9px}
 .tabs button{font-weight:400;min-height:56px;padding:5px 2px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:5px;font-size:12px;position:relative}
 .tabs button[aria-selected="true"]{box-shadow:none}
 .tabs button[aria-selected="true"]::after{content:"";position:absolute;bottom:0;left:calc(50% - 10px);width:20px;height:2px;background:var(--accent)}

@@ -294,7 +294,7 @@ async function main() {
       await navigator.serviceWorker.ready;
       if (!navigator.serviceWorker.controller) await new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }));
     });
-    ok((await offlinePage.evaluate(() => caches.keys())).includes('sport-journal-v14'), 'Updated offline cache is installed');
+    ok((await offlinePage.evaluate(() => caches.keys())).includes('sport-journal-v15'), 'Updated offline cache is installed');
     await offlineContext.setOffline(true);
     await offlinePage.reload({ waitUntil: 'domcontentloaded' });
     await offlinePage.locator('#tabs [data-tab="today"]').tap();
