@@ -41,6 +41,9 @@
   var HINGE={hamstrings:1,glutes:1,lower_back:0.5};
   var REAR={rear_delt:1,upper_back:0.5};
   var CORE_ANTI={obliques:1,abs:0.5};
+  var HANDSTAND={front_delt:1,side_delt:0.5,triceps:0.5};
+  var DIP={triceps:1,chest:0.5,front_delt:0.5};
+  var LEVER={lats:1,abs:0.5,upper_back:0.5};
 
   var CATALOG={
     bench:{m:PRESS_FLAT,eq:'barbell'}, db_bench:{m:PRESS_FLAT,eq:'dumbbell'}, smith_bench:{m:PRESS_FLAT,eq:'smith'}, chest_press:{m:PRESS_FLAT,eq:'machine'},
@@ -66,7 +69,23 @@
     hyperextension:{m:{glutes:1,lower_back:1,hamstrings:0.5},eq:'plate'},
     bulgarian:{m:LUNGE,eq:'dumbbell'}, reverse_lunge:{m:LUNGE,eq:'dumbbell'}, walking_lunge:{m:LUNGE,eq:'dumbbell'}, step_up:{m:LUNGE,eq:'dumbbell'},
     leg_curl:{m:{hamstrings:1},eq:'machine'}, ball_leg_curl:{m:{hamstrings:1},eq:'bodyweight'},
-    calf_raise:{m:{calves:1},eq:'machine'}, seated_calf:{m:{calves:1},eq:'machine'}, legpress_calf:{m:{calves:1},eq:'machine'}
+    calf_raise:{m:{calves:1},eq:'machine'}, seated_calf:{m:{calves:1},eq:'machine'}, legpress_calf:{m:{calves:1},eq:'machine'},
+    // Calisthenics: skills and their ladders. Static holds count as sets for the muscles that hold the position.
+    hs_wall:{m:HANDSTAND,eq:'bodyweight'}, wall_plank:{m:HANDSTAND,eq:'bodyweight'},
+    pike_pushup:{m:PRESS_OVERHEAD,eq:'bodyweight'}, pike_pushup_elevated:{m:PRESS_OVERHEAD,eq:'bodyweight'}, hspu_negative:{m:PRESS_OVERHEAD,eq:'bodyweight'},
+    l_pullup:{m:{lats:1,upper_back:0.5,biceps:0.5,abs:0.5},eq:'bodyweight'}, archer_pullup:{m:PULL_VERTICAL,eq:'bodyweight'}, chinup:{m:{lats:1,biceps:1,upper_back:0.5},eq:'bodyweight'},
+    explosive_pullup:{m:PULL_VERTICAL,eq:'bodyweight'}, muscleup_negative:{m:{lats:1,triceps:0.5,chest:0.5},eq:'bodyweight'}, scap_pullup:{m:{upper_back:1},eq:'bodyweight'},
+    dips_negative:{m:DIP,eq:'bodyweight'}, dips_slow:{m:DIP,eq:'bodyweight'},
+    australian_row:{m:ROW,eq:'bodyweight'}, australian_row_feet:{m:ROW,eq:'bodyweight'}, australian_row_pause:{m:ROW,eq:'bodyweight'}, rings_row:{m:ROW,eq:'bodyweight'},
+    pushup:{m:PRESS_FLAT,eq:'bodyweight'}, pushup_decline:{m:PRESS_INCLINE,eq:'bodyweight'}, pushup_decline_b:{m:PRESS_INCLINE,eq:'bodyweight'},
+    diamond_pushup:{m:{triceps:1,chest:0.5,front_delt:0.5},eq:'bodyweight'}, archer_pushup:{m:PRESS_FLAT,eq:'bodyweight'}, pseudo_planche_pushup:{m:{chest:1,front_delt:1,triceps:0.5},eq:'bodyweight'},
+    tuck_front_lever:{m:LEVER,eq:'bodyweight'}, adv_tuck_front_lever:{m:LEVER,eq:'bodyweight'},
+    l_sit_tuck:{m:{abs:1},eq:'bodyweight'}, l_sit_one_leg:{m:{abs:1},eq:'bodyweight'}, l_sit:{m:{abs:1},eq:'bodyweight'},
+    crow:{m:{front_delt:1,abs:0.5},eq:'bodyweight'}, planche_lean:{m:{front_delt:1,abs:0.5},eq:'bodyweight'},
+    hollow_hold:{m:{abs:1},eq:'bodyweight'}, hanging_straight_leg:{m:{abs:1,obliques:0.5},eq:'bodyweight'}, toes_to_bar:{m:{abs:1,obliques:0.5,lats:0.5},eq:'bodyweight'},
+    side_plank_dip:{m:CORE_ANTI,eq:'bodyweight'}, windshield_wiper:{m:{obliques:1,abs:0.5},eq:'bodyweight'}, hanging_oblique_raise:{m:{obliques:1,abs:1},eq:'bodyweight'},
+    pistol_box:{m:LUNGE,eq:'bodyweight'}, pistol_box_a:{m:LUNGE,eq:'bodyweight'}, pistol:{m:LUNGE,eq:'bodyweight'}, shrimp_squat:{m:LUNGE,eq:'bodyweight'},
+    nordic_negative:{m:{hamstrings:1},eq:'bodyweight'}, single_calf:{m:{calves:1},eq:'bodyweight'}
   };
 
   // Name rules for exercises outside the catalog; the first match wins.

@@ -231,15 +231,23 @@ function plannedSets(ex,w){
   return ex.sets;
 }
 function plannedType(d){ var p=P(); return (p&&p.schedule&&p.schedule[String(isoDow(d))])||'rest'; }
-function typeOf(d){ var w=S.workouts[d]; return (w&&w.type)||plannedType(d); }
+// Days of a finished cycle keep their meaning: its "map" turns old session keys into the ones that hold those exercises now.
+function typeOf(d){ var w=S.workouts[d],t=(w&&w.type)||plannedType(d),m=pastMap(d); return m&&m[t]&&P().sessions[m[t]]?m[t]:t; }
+function pastMap(d){ var p=P(),best=null; if(!p||!p.start||d>=p.start) return null; ((p.past)||[]).forEach(function(c){ if(c.start&&c.start<=d&&(!best||c.start>best.start)) best=c; }); return best&&best.map; }
+// Every training session in the program (calisthenics A/L/B, gym GA/GL/GB…), without run and rest.
+function sessionKeys(){ var p=P(); if(!p||!p.sessions) return []; return Object.keys(p.sessions).filter(function(k){ var s=p.sessions[k]; return k!=='run'&&k!=='rest'&&s&&s.items&&s.items.length; }); }
+function isGymType(t){ return sessionKeys().indexOf(t)>=0; }
+// Programs group sessions so a day can be switched between them; without "programs" every session is one group.
+function programs(){ var p=P(); return (p&&p.programs&&p.programs.length)?p.programs:[{key:'all',title:'',sessions:sessionKeys()}]; }
+function progOf(t){ var ps=programs(); for(var i=0;i<ps.length;i++) if(ps[i].sessions.indexOf(t)>=0) return ps[i]; return null; }
 function typeTitle(t){ var p=P(); if(p&&p.sessions&&p.sessions[t]) return p.sessions[t].title; for(var i=0;i<TYPES.length;i++) if(TYPES[i][0]===t) return TYPES[i][1]; return t; }
-function allExercises(){ var p=P(),out=[]; if(!p) return out; ['A','L','B'].forEach(function(k){ var s=p.sessions[k]; if(s) s.items.forEach(function(ex){ out.push({ex:ex,ses:k}); }); }); return out; }
+function allExercises(){ var p=P(),out=[]; if(!p) return out; sessionKeys().forEach(function(k){ var s=p.sessions[k]; if(s) s.items.forEach(function(ex){ out.push({ex:ex,ses:k}); }); }); return out; }
 // An alternative inherits sets, reps, rest and superset from its slot; its own fields win.
 function effEx(slot,choice){
   if(!choice||choice===slot.id) return slot;
   var a=(slot.alts||[]).filter(function(x){ return x.id===choice; })[0];
   if(!a) return slot;
-  var e=Object.assign({},slot,{inc:0,incText:'',unit:undefined,noWeight:false,bw:false,cue:'',start:null,repsUnit:undefined},a);
+  var e=Object.assign({},slot,{inc:0,incText:'',unit:undefined,noWeight:false,bw:false,perSide:false,cue:'',start:null,repsUnit:undefined},a);
   e.slot=slot.id; e.slotName=slot.name; e.isAlt=true; e.alts=slot.alts;
   return e;
 }
@@ -247,8 +255,13 @@ function findEx(id){
   var a=allExercises(),i,j;
   for(i=0;i<a.length;i++) if(a[i].ex.id===id) return a[i].ex;
   for(i=0;i<a.length;i++){ var al=a[i].ex.alts||[]; for(j=0;j<al.length;j++) if(al[j].id===id) return effEx(a[i].ex,id); }
+  // Exercises of finished cycles keep their names, units and history.
+  var ps=pastSlots();
+  for(i=0;i<ps.length;i++) if(ps[i].ex.id===id) return ps[i].ex;
+  for(i=0;i<ps.length;i++){ var pa=ps[i].ex.alts||[]; for(j=0;j<pa.length;j++) if(pa[j].id===id) return effEx(ps[i].ex,id); }
   return null;
 }
+function pastSlots(){ var p=P(),out=[]; ((p&&p.past)||[]).forEach(function(c){ ['A','L','B'].forEach(function(k){ var s=c.sessions&&c.sessions[k]; if(s) s.items.forEach(function(ex){ out.push({ex:ex,cycle:c.title||'Прошлый цикл'}); }); }); }); return out; }
 // Which exercise fills a slot on a date: the day's own choice, else the last choice made before it.
 function slotChoice(slot,d){
   var wo=S.workouts[d];
@@ -267,16 +280,20 @@ function lastSession(exId,before){
 }
 function maxW(rows){ var m=null; rows.forEach(function(r){ if(r.w!=null&&(m==null||r.w>m)) m=r.w; }); return m; }
 function setTxt(ex,r){ if(ex.noWeight) return r.r+(ex.repsUnit?' '+ex.repsUnit:''); if(r.w==null||r.w===0) return r.r+(ex.bw?' повт.':''); return (ex.bw?'+':'')+fmtN(r.w)+'×'+r.r; }
+// Top of the range in every working set: sets at the session's top weight, so warm-ups never count and never push a work set out.
+function reachedTop(ex,last){
+  var hi=range(ex.reps)[1],planned=plannedSets(ex,weekOf(last.date)),lw=maxW(last.rows);
+  var work=(ex.noWeight||!lw)?last.rows:last.rows.filter(function(r){ return r.w===lw; });
+  return work.length>=planned&&work.every(function(r){ return r.r>=hi; });
+}
 function hintFor(ex,d,last){
   var w=weekOf(d),ph=phaseOf(w).key,hi=range(ex.reps)[1];
   var res={last:'',advice:'',cls:''};
   if(last) res.last='Прошлый раз, '+fmtShort(last.date)+': '+last.rows.map(function(r){ return setTxt(ex,r); }).join(' · ');
   if(ex.start&&(ph==='intro'||ph==='pre')){ var i=Math.max(0,Math.min(ex.start.length-1,(w<1?1:w)-1)); res.advice='План недели: '+ex.start[i]; return res; }
   if(ph==='deload'){ res.advice='Разгрузка: вес как обычно, подходов меньше'; return res; }
-  if(!last){ res.advice=ex.noWeight?'Делай так, чтобы на '+hi+' '+repsWord(ex)+' оставалось 2–3 в запасе':'Подбери вес: на '+hi+' повторах должно оставаться 2–3 в запасе'; return res; }
-  var planned=plannedSets(ex,weekOf(last.date));
-  var top=last.rows.length>=planned&&last.rows.slice(0,planned).every(function(r){ return r.r>=hi; });
-  var lw=maxW(last.rows);
+  if(!last){ res.advice=ex.bw?'Свой вес: на '+hi+' повторах оставь 2–3 в запасе':ex.noWeight?'Делай так, чтобы на '+hi+' '+repsWord(ex)+' оставалось 2–3 в запасе':'Подбери вес: на '+hi+' повторах должно оставаться 2–3 в запасе'; return res; }
+  var top=reachedTop(ex,last),lw=maxW(last.rows);
   if(top){
     res.cls='up';
     if(ex.noWeight||(ex.bw&&!lw)) res.advice='Пора усложнить: '+ex.incText;
@@ -455,7 +472,7 @@ function weekStrip(d){
   var from=monday(d),today=todayStr(),names=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'],h='<div class="td-week" role="group" aria-label="Неделя">';
   for(var i=0;i<7;i++){
     var day=addDays(from,i),st=SportStats.dayStatus(day,S.workouts[day],plannedType(day),today);
-    h+='<button type="button" class="td-day k-'+st.kind+(day===d?' sel':'')+'" data-act="pick-day" data-date="'+day+'" aria-label="'+esc(fmtDateI.format(parseYmd(day))+' · '+typeTitle(st.type))+'"'+(day===d?' aria-current="date"':'')+'><b>'+names[i]+'</b><span class="td-mark">'+(st.kind==='gym'||st.kind==='run'?esc(TYPE_MARK[st.type]||'✓'):'')+'</span><small>'+Number(day.slice(8))+'</small></button>';
+    h+='<button type="button" class="td-day k-'+st.kind+(day===d?' sel':'')+'" data-act="pick-day" data-date="'+day+'" aria-label="'+esc(fmtDateI.format(parseYmd(day))+' · '+typeTitle(typeOf(day)))+'"'+(day===d?' aria-current="date"':'')+'><b>'+names[i]+'</b><span class="td-mark">'+(st.kind==='gym'||st.kind==='run'?esc(TYPE_MARK[st.type]||'✓'):'')+'</span><small>'+Number(day.slice(8))+'</small></button>';
   }
   return h+'</div>';
 }
@@ -500,7 +517,7 @@ function todoRows(d){
 function weekTeaser(){
   var p=P(),today=todayStr(),m=weightModel(),k=m.k,w=m.cur,gym=0;
   if(!w) return '';
-  for(var i=0;i<7;i++){ var d=addDays(w.from,i),wo=S.workouts[d]; if(d<=today&&SportStats.recorded(wo)&&['A','L','B'].indexOf(wo.type||plannedType(d))>=0) gym++; }
+  for(var i=0;i<7;i++){ var d=addDays(w.from,i),wo=S.workouts[d]; if(d<=today&&SportStats.recorded(wo)&&isGymType(typeOf(d))) gym++; }
   var weight=w.partial!=null?'вес '+fmtN(Math.round(w.partial*10)/10)+(w.state==='above'?' · выше коридора':w.state==='below'?' · быстрее цели':' · в коридоре'):'вес — нет замеров';
   return '<button type="button" class="td-teaser" data-act="navigate" data-tab="stats"><span>Неделя '+k+': '+gym+' из '+(((p.goals||{}).week||{}).gym||3)+' залов · '+esc(weight)+'</span><span>Прогресс</span></button>';
 }
@@ -565,8 +582,12 @@ function calendarKey(e){
 function renderToday(){
   var d=S.date,w=weekOf(d),ph=phaseOf(w),type=typeOf(d),wo=S.workouts[d];
   var h=datebar(d);
-  h+='<div class="chips" role="group" aria-label="Что сегодня">'+TYPES.map(function(x){
-    return '<button class="chip" type="button" data-act="type" data-type="'+x[0]+'" aria-pressed="'+(x[0]===type)+'">'+esc(typeTitle(x[0]))+(x[0]===plannedType(d)?'<small> · план</small>':'')+'</button>';
+  // The day shows one program's sessions at a time; the switch only changes the list, a tap on a session records it.
+  var progs=programs(),cur=(S.dayProg&&S.dayProg.d===d&&progs.filter(function(x){ return x.key===S.dayProg.k; })[0])||progOf(type)||progOf(plannedType(d))||progs[0];
+  if(progs.length>1) h+='<div class="st-seg day-prog" role="group" aria-label="Программа дня">'+progs.map(function(x){ return '<button type="button" data-act="day-prog" data-prog="'+esc(x.key)+'" aria-pressed="'+(x.key===cur.key)+'">'+esc(x.title)+'</button>'; }).join('')+'</div>';
+  var short=function(t){ var s=typeTitle(t),pre=cur.title?cur.title+' · ':''; return pre&&s.indexOf(pre)===0?s.slice(pre.length):s; };
+  h+='<div class="chips" role="group" aria-label="Что сегодня">'+cur.sessions.concat(['run','rest']).map(function(x){
+    return '<button class="chip" type="button" data-act="type" data-type="'+x+'" aria-pressed="'+(x===type)+'">'+esc(short(x))+(x===plannedType(d)?'<small> · план</small>':'')+'</button>';
   }).join('')+'</div>';
   if(ph.hint) h+='<p class="phase-hint"><b>'+esc(ph.name)+'.</b> '+esc(ph.hint)+'</p>';
   if(type==='rest') h+=restBlock();
@@ -619,9 +640,12 @@ function targetFor(ex,d,k,last){
     if(m) return {w:num(m[1]),r:+m[2]};
   }
   if(!last) return null;
-  var row=last.rows[k]||last.rows[last.rows.length-1],lw=maxW(last.rows),planned=plannedSets(ex,weekOf(last.date));
-  var top=last.rows.length>=planned&&last.rows.slice(0,planned).every(function(r){ return r.r>=hi; });
+  var row=last.rows[k]||last.rows[last.rows.length-1],lw=maxW(last.rows),top=reachedTop(ex,last);
   if(top&&ex.inc>0&&lw!=null&&!ex.noWeight&&!ex.bw) return {w:lw+ex.inc,r:lo};
+  // Pull-ups and dips progress by weight on the belt, as the hint says.
+  if(top&&ex.bw&&ex.inc>0) return {w:(lw||0)+ex.inc,r:lo};
+  // Machines step to the next plate; its weight differs per machine, so the number is left to type.
+  if(top&&!ex.noWeight&&!ex.bw&&!(ex.inc>0)&&lw!=null) return {w:null,r:lo,next:true};
   if(ex.noWeight||ex.bw||lw==null) return {w:ex.noWeight?null:(row.w!=null?row.w:null),r:Math.min(hi,Math.max(lo,(row.r||lo)+(top?0:1)))};
   // Weighted lifts hold the working weight; a lighter first set is a warm-up, not the target.
   var atTop=last.rows.filter(function(r){ return r.w===lw; }).reduce(function(m,r){ return Math.max(m,r.r||0); },0);
@@ -634,7 +658,20 @@ function barFor(ex){
   if(eq==='ez') return {name:'EZ-гриф',kg:typeof own.ez==='number'?own.ez:SportMuscles.BARS.ez};
   return null;
 }
-function targetTxt(ex,t){ if(!t) return ''; if(ex.noWeight||t.w==null) return t.r+' '+(ex.repsUnit||'повт.'); return (ex.bw?'+':'')+fmtN(t.w)+' '+(ex.unit||'кг')+' × '+t.r; }
+// One line under each exercise: what the logged number means for this equipment.
+function weightNote(ex,bar,t){
+  if(ex.noWeight) return '';
+  if(bar){ var pl=t&&t.w!=null?SportMuscles.plates(t.w,bar.kg):null; return 'Вес общий, с '+(bar.name==='Гриф'?'грифом':'EZ-грифом')+' '+fmtN(bar.kg)+' кг'+(pl?' · на сторону '+(pl.length?pl.map(fmtN).join(' + '):'без блинов'):''); }
+  var eq=SportMuscles.info(ex.id,ex.name).eq;
+  if(ex.bw) return 'Только доп. вес на поясе, свой вес не прибавляй. Без веса — 0';
+  if(eq==='assisted') return 'Противовес гравитрона: меньше число — тяжелее';
+  if(/гантел/.test(ex.unit||'')) return 'Вес одной гантели';
+  if(eq==='plate') return 'Вес блина, который держишь';
+  if(eq==='smith'||eq==='lever') return 'Только блины, гриф или рычаг тренажёра не считаем';
+  if(eq==='machine'||eq==='cable') return 'Вес по тренажёру: число на плитке или сумма блинов';
+  return '';
+}
+function targetTxt(ex,t){ if(!t) return ''; if(t.next) return 'следующая плитка × '+t.r; if(ex.noWeight||t.w==null) return t.r+' '+(ex.repsUnit||'повт.'); return (ex.bw?'+':'')+fmtN(t.w)+' '+(ex.unit||'кг')+' × '+t.r; }
 function restSeconds(text){ var m=String(text||'').match(/(\d+)/); if(!m) return 90; var n=+m[1]; return /мин/.test(text)?n*60:n; }
 function sessionCount(type,d,w,wo){
   var ses=P().sessions[type],done=0,total=0; if(!ses) return {done:0,total:0};
@@ -653,10 +690,11 @@ function sessionBlock(type,d,w,wo){
     h+='<li class="ex'+(doneN>=planned?' ex-done':'')+'"><div class="ex-top"><span class="ex-n">'+(i+1)+'</span><div class="ex-name"><h3>'+esc(ex.name)+'</h3>'+
       '<p class="target">'+planned+' × '+esc(dash(ex.reps))+(ex.repsUnit?' '+esc(ex.repsUnit):'')+(ex.perSide?' на сторону':'')+' · отдых '+esc(ex.rest)+'</p>'+
       (ex.isAlt?'<p class="tag swapped">Замена вместо «'+esc(slot.name)+'»</p>':'')+(ss?'<p class="tag">'+esc(ss)+'</p>':'')+'</div></div>';
-    if(t0) h+='<p class="goal"><b>Цель: '+esc(targetTxt(ex,t0))+'</b>'+(hn.cls==='up'?' · <span class="up">прибавка</span>':'')+'</p>';
+    if(t0) h+='<p class="goal"><b>Цель: '+esc(targetTxt(ex,t0))+'</b>'+(hn.cls==='up'?' · <span class="up">'+esc(ex.noWeight&&ex.incText?ex.incText:'прибавка')+'</span>':'')+'</p>';
     else if(hn.advice) h+='<p class="goal"><b>'+esc(hn.advice)+'</b></p>';
-    var bar=barFor(ex),pl=bar&&t0&&t0.w!=null?SportMuscles.plates(t0.w,bar.kg):null;
-    if(pl) h+='<p class="plates">'+esc(bar.name+' '+fmtN(bar.kg)+(pl.length?' + на сторону '+pl.map(fmtN).join(' + '):' без блинов'))+'</p>';
+    var bar=barFor(ex),wn=weightNote(ex,bar,t0);
+    if(wn) h+='<p class="plates">'+esc(wn)+'</p>';
+    if(bar&&rows.some(function(r){ return r&&r.w!=null&&r.w>0&&r.w<bar.kg; })) h+='<p class="plates warn-text">Вес меньше грифа. Проверь: штанга записывается вместе с грифом.</p>';
     if(last) h+='<p class="last">Прошлый раз, '+esc(fmtShort(last.date))+': '+esc(last.rows.map(function(r){ return setTxt(ex,r); }).join(' · '))+'</p>';
     h+='<div class="sets">';
     for(var k=0;k<n;k++){
@@ -673,7 +711,7 @@ function sessionBlock(type,d,w,wo){
     var open=S.swapOpen===slot.id;
     h+='</div><div class="ex-foot"><button class="btn-ghost" type="button" data-act="addset" data-ex="'+ex.id+'" data-slot="'+slot.id+'" data-n="'+n+'">+ подход</button>'+
       ((slot.alts&&slot.alts.length)?'<button class="btn-ghost" type="button" data-act="swap-open" data-slot="'+slot.id+'" aria-expanded="'+open+'">'+(open?'Закрыть':'Заменить')+'</button>':'')+'</div>';
-    if(ex.cue||bar) h+='<details class="cue-d"><summary>Как делать</summary>'+(ex.cue?'<p class="cue">'+esc(ex.cue)+'</p>':'')+(bar?'<p class="cue muted">Вес записывай общий, вместе с грифом: '+esc(bar.name.toLowerCase()+' '+fmtN(bar.kg))+' кг.</p>':'')+'</details>';
+    if(ex.cue) h+='<details class="cue-d"><summary>Как делать</summary><p class="cue">'+esc(ex.cue)+'</p></details>';
     if(open){
       var choices=[slot].concat(slot.alts);
       h+='<div class="opts swaps">'+choices.map(function(c){
@@ -691,16 +729,17 @@ function sessionBlock(type,d,w,wo){
 }
 // Summary after the session: counts, tonnage and new estimated maxima against all earlier sessions.
 function finishSummary(type,d,w,wo){
-  var cnt=sessionCount(type,d,w,wo),tons=SportStats.tonnage(wo&&wo.sets),prs=[];
+  // Same rules as the progress tab: working sets only, pull-ups with body weight, counterweight never a record.
+  var cnt=sessionCount(type,d,w,wo),tons=SportStats.workingTonnage(wo&&wo.sets,function(id){ return liftInfo(id).assisted; }),prs=[];
   Object.keys((wo&&wo.sets)||{}).forEach(function(id){
     var ex=findEx(id); if(!ex||ex.noWeight) return;
-    var best=function(rows){ return filled(rows).reduce(function(m,r){ var e=SportStats.e1rm(r.w,r.r); return e!=null&&e>m?e:m; },0); };
-    var now=best(wo.sets[id]),before=0;
-    sortedDates(false).forEach(function(x){ if(x<d){ var b=best(S.workouts[x].sets&&S.workouts[x].sets[id]); if(b>before) before=b; } });
-    if(now>0&&before>0&&now>before) prs.push(ex.name+': '+fmtN(Math.round(before))+' → '+fmtN(Math.round(now)));
+    var best=function(rows,x){ var b=bestE1rm(ex,rows,x); return b?b.e:0; };
+    var now=best(wo.sets[id],d),before=0;
+    sortedDates(false).forEach(function(x){ if(x<d){ var b=best(S.workouts[x].sets&&S.workouts[x].sets[id],x); if(b>before) before=b; } });
+    if(now>0&&before>0&&Math.round(now)>Math.round(before)) prs.push(ex.name+': '+fmtN(Math.round(before))+' → '+fmtN(Math.round(now)));
   });
-  var h='<section class="panel wk-summary" aria-label="Итог тренировки"><h3>Итог</h3><ul class="list"><li><span>Подходы</span><span>'+cnt.done+' из '+cnt.total+'</span></li><li><span>Объём</span><span>'+fmtN(Math.round(tons/100)/10)+' т</span></li></ul>';
-  h+=prs.length?'<p class="small"><b>Новые максимумы (оценка 1ПМ):</b> '+esc(prs.join(' · '))+'</p>':'<p class="small muted">Новых максимумов нет — для входной недели это нормально.</p>';
+  var h='<section class="panel wk-summary" aria-label="Итог тренировки"><h3>Итог</h3><ul class="list"><li><span>Подходы</span><span>'+cnt.done+' из '+cnt.total+'</span></li><li><span>Объём рабочих подходов</span><span>'+fmtN(Math.round(tons/100)/10)+' т</span></li></ul>';
+  h+=prs.length?'<p class="small"><b>Новые максимумы (оценка 1ПМ):</b> '+esc(prs.join(' · '))+'</p>':'<p class="small muted">Новых максимумов нет'+(phaseOf(w).key==='intro'?' — для входной недели это нормально.':phaseOf(w).key==='deload'?' — на разгрузке так и должно быть.':'. Рост идёт волнами: держи вес и добирай повторы.')+'</p>';
   if(cnt.done<cnt.total) h+='<p class="small muted">Не все подходы записаны. Пропущенное не догоняем: следующая тренировка по графику.</p>';
   return h+'<p class="small muted">Как прошло — запиши в заметке ниже.</p></section>';
 }
@@ -710,7 +749,7 @@ function startRest(sec){
   if(!sec) return;
   if(!restTimer.el){
     restTimer.el=document.createElement('div'); restTimer.el.className='rest-timer';
-    restTimer.el.innerHTML='<span role="status"></span><div class="rt-adj">'+[-30,-15,15,30].map(function(v){return '<button type="button" data-rest-adj="'+v+'" aria-label="'+(v>0?'Добавить ':'Убрать ')+Math.abs(v)+' секунд">'+(v>0?'+':'−')+Math.abs(v)+'</button>';}).join('')+'</div><button type="button" class="rt-skip" data-rest-skip>Пропустить</button>';
+    restTimer.el.innerHTML='<span role="status"></span><div class="rt-adj"><button type="button" data-rest-adj="10" aria-label="Добавить 10 секунд">+10 с</button></div><button type="button" class="rt-skip" data-rest-skip>Пропустить</button>';
     restTimer.el.addEventListener('click',function(e){
       var b=e.target.closest('button'); if(!b) return;
       if(b.hasAttribute('data-rest-skip')) return stopRest();
@@ -987,10 +1026,13 @@ function renderHistory(){
   var h='<div class="field"><label for="ex-select">Упражнение</label><select id="ex-select">';
   var hasData=function(id){ return Object.keys(S.workouts).some(function(d){ var w=S.workouts[d]; return filled(w.sets&&w.sets[id]).length>0; }); };
   var shown={};
-  ['A','L','B'].forEach(function(k){ var s=p.sessions[k]; if(!s) return; h+='<optgroup label="'+esc(s.title)+'">'+s.items.map(function(ex){
+  sessionKeys().forEach(function(k){ var s=p.sessions[k]; if(!s) return; h+='<optgroup label="'+esc(s.title)+'">'+s.items.map(function(ex){
     var o='<option value="'+ex.id+'"'+(ex.id===S.exSel?' selected':'')+'>'+esc(ex.name)+'</option>'; shown[ex.id]=1;
     (ex.alts||[]).forEach(function(a){ if(!shown[a.id]&&hasData(a.id)){ shown[a.id]=1; o+='<option value="'+a.id+'"'+(a.id===S.exSel?' selected':'')+'>   замена: '+esc(a.name)+'</option>'; } });
     return o; }).join('')+'</optgroup>'; });
+  var past={};
+  pastSlots().forEach(function(a){ [a.ex].concat(a.ex.alts||[]).forEach(function(e){ if(!shown[e.id]&&hasData(e.id)){ shown[e.id]=1; (past[a.cycle]=past[a.cycle]||[]).push(e); } }); });
+  Object.keys(past).forEach(function(t){ h+='<optgroup label="'+esc(t)+'">'+past[t].map(function(e){ return '<option value="'+e.id+'"'+(e.id===S.exSel?' selected':'')+'>'+esc(e.name)+'</option>'; }).join('')+'</optgroup>'; });
   h+='</select></div>';
   var ex=findEx(S.exSel);
   if(ex){
@@ -1010,7 +1052,7 @@ function renderHistory(){
       var w=S.workouts[d],n=0; Object.keys(w.sets||{}).forEach(function(k){ n+=filled(w.sets[k]).length; });
       var parts=[]; if(n) parts.push(n+' '+plural(n,'подход','подхода','подходов'));
       if(w.run&&w.run.min) parts.push(fmtN(w.run.min)+' мин'+(w.run.km?' · '+fmtN(w.run.km)+' км':''));
-      h+='<li><span>'+esc(fmtDay(d))+' · '+esc(typeTitle(w.type||plannedType(d)))+'</span><span>'+esc(parts.join(' · ')||'заметка')+'</span></li>';
+      h+='<li><span>'+esc(fmtDay(d))+' · '+esc(typeTitle(typeOf(d)))+'</span><span>'+esc(parts.join(' · ')||'заметка')+'</span></li>';
     });
     h+='</ul></div>';
   } else h+='<div class="panel"><p class="muted small">Здесь будет список тренировок и пробежек.</p></div>';
@@ -1018,7 +1060,7 @@ function renderHistory(){
 }
 
 /* ---------- render: progress tab ---------- */
-var TYPE_MARK={A:'A',L:'Н',B:'B',run:'б'};
+var TYPE_MARK={A:'A',L:'Н',B:'B',GA:'A',GL:'Н',GB:'B',run:'б'};
 function statsWidth(){ return progressWidth(); }
 function statsWeek(k){ var p=P(); var from=addDays(p.start,7*(k-1)); return {from:from,to:addDays(from,6)}; }
 function estimateDay(d){ var m=S.estimates[d.slice(0,7)],x=m&&m.days&&m.days[d]; return x&&x.total&&x.total.complete?x.total:null; }
@@ -1032,7 +1074,7 @@ function statsGoals(k,weeks){
   var w=statsWeek(k),today=todayStr(),gym=0,run=0,steps=[],sleep=[],protein=[];
   for(var d=w.from;d<=w.to;d=addDays(d,1)){
     var wo=S.workouts[d];
-    if(d<=today&&SportStats.recorded(wo)){ if((wo.type||plannedType(d))==='run') run++; else if(['A','L','B'].indexOf(wo.type||plannedType(d))>=0) gym++; }
+    if(d<=today&&SportStats.recorded(wo)){ if(typeOf(d)==='run') run++; else if(isGymType(typeOf(d))) gym++; }
     var st=bodyGet(d,'steps'),sl=bodyGet(d,'sleep'),e=estimateDay(d);
     if(d<today&&st!=null) steps.push(st);
     if(d<=today&&sl!=null) sleep.push(sl);
@@ -1075,7 +1117,7 @@ function bestE1rm(ex,rows,d){
   return best;
 }
 function strengthRows(){
-  var p=P(),today=todayStr(),ids=((p.goals||{}).lifts)||['A','L','B'].map(function(k){var s=p.sessions[k];return s&&s.items[0]&&s.items[0].id;}).filter(Boolean),rows=[],prior=(p.goals||{}).prior||{};
+  var p=P(),today=todayStr(),ids=((p.goals||{}).lifts)||sessionKeys().map(function(k){var s=p.sessions[k];return s&&s.items[0]&&s.items[0].id;}).filter(Boolean),rows=[],prior=(p.goals||{}).prior||{};
   ids.forEach(function(id){
     var slot=null; allExercises().forEach(function(a){ if(a.ex.id===id) slot=a.ex; });
     var ex=slot?effEx(slot,slotChoice(slot,addDays(today,1))):findEx(id); if(!ex||ex.noWeight) return;
@@ -1117,8 +1159,8 @@ function volumeSection(width){
   var seg='<div class="st-seg" role="group" aria-label="Как считать объём">'+[['muscles','Мышцы'],['types','Тренировки']].map(function(x){return '<button type="button" data-act="stats-vol" data-mode="'+x[0]+'" aria-pressed="'+(mode===x[0])+'">'+x[1]+'</button>';}).join('')+'</div>';
   h+='<section class="st-sec" aria-labelledby="st-vol"><div class="st-head"><h3 id="st-vol">Объём</h3>'+seg+'</div>';
   if(mode==='types'){
-    var groups=['A','L','B'].filter(function(t){return p.sessions[t];}).map(function(t){
-      return {label:p.sessions[t].title,data:sortedDates(false).filter(function(d){return d<=today&&(S.workouts[d].type||plannedType(d))===t;}).map(function(d){return {date:d,t:SportStats.workingTonnage(S.workouts[d].sets,function(id){return liftInfo(id).assisted;})};}).filter(function(x){return x.t>0;})};
+    var groups=sessionKeys().filter(function(t){return p.sessions[t];}).map(function(t){
+      return {label:p.sessions[t].title,data:sortedDates(false).filter(function(d){return d<=today&&typeOf(d)===t;}).map(function(d){return {date:d,t:SportStats.workingTonnage(S.workouts[d].sets,function(id){return liftInfo(id).assisted;})};}).filter(function(x){return x.t>0;})};
     });
     var tv=SportStats.typeVolume({width:width,groups:groups});
     return h+(tv||'<p class="muted small">Тренировок с весами пока нет.</p>')+'<p class="small muted">Вес × повторы рабочих подходов. Каждая тренировка сравнивается только с прошлой такой же; процент — к предыдущей.</p></section>';
@@ -1156,7 +1198,7 @@ function renderStats(){
     for(var i=0;i<7;i++){
       var d=addDays(p.start,7*(w-1)+i),st=SportStats.dayStatus(d,S.workouts[d],plannedType(d),today);
       if(st.kind==='gym')gyms++; if(st.kind==='run')runs++;
-      grid+='<span class="st-cell '+st.kind+'" data-i="'+(w*7+i)+'" title="'+esc(fmtShort(d)+' · '+typeTitle(st.type))+'">'+(st.kind==='gym'||st.kind==='run'?esc(TYPE_MARK[st.type]||''):'')+'</span>';
+      grid+='<span class="st-cell '+st.kind+'" data-i="'+(w*7+i)+'" title="'+esc(fmtShort(d)+' · '+typeTitle(typeOf(d)))+'">'+(st.kind==='gym'||st.kind==='run'?esc(TYPE_MARK[st.type]||''):'')+'</span>';
     }
   }
   h+='<section class="st-sec'+anim+'" aria-labelledby="st-grid"><div class="st-head"><h3 id="st-grid">Постоянство</h3><span>'+gyms+' '+plural(gyms,'зал','зала','залов')+' · '+runs+' '+plural(runs,'пробежка','пробежки','пробежек')+' · неделя '+k+' из '+p.weeks+'</span></div><div class="st-grid" role="img" aria-label="Сетка цикла по дням">'+grid+'</div>'+
@@ -1201,7 +1243,7 @@ function renderProgram(){
   h+='<p class="sec">Неделя</p><div class="panel"><ul class="list">';
   for(var i=1;i<=7;i++){ var k=p.schedule[String(i)]||'rest'; var extra=k==='run'&&p.run&&p.run.days&&p.run.days[String(i)]?p.run.days[String(i)]:''; h+='<li><span>'+names[i]+'</span><span>'+esc(typeTitle(k))+(extra?' · '+esc(extra):'')+'</span></li>'; }
   h+='</ul>'+(p.minimum?'<p class="small mt8"><b>Минимум на плохую неделю:</b> '+esc(p.minimum)+'</p>':'')+'</div>';
-  ['A','L','B'].forEach(function(k){
+  sessionKeys().forEach(function(k){
     var s=p.sessions[k]; if(!s) return;
     h+='<p class="sec">'+esc(s.title)+(s.sub?' · '+esc(s.sub):'')+'</p><div class="panel tbl"><table><thead><tr><th>#</th><th>Упражнение</th><th>Подходы</th><th>Отдых</th></tr></thead><tbody>';
     s.items.forEach(function(ex,i){ var ss=supersetNote(s.items,i); var alts=(ex.alts||[]).map(function(a){ return a.name; }).join(', '); h+='<tr><td>'+(i+1)+'</td><td>'+esc(ex.name)+'<span class="sub">'+esc([ss,alts?'Замены: '+alts:''].filter(Boolean).join(' · '))+'</span></td><td>'+ex.sets+' × '+esc(dash(ex.reps))+(ex.perSide?' на ст.':'')+'</td><td>'+esc(ex.rest)+'</td></tr>'; });
@@ -1316,7 +1358,7 @@ function renderHealth(){
 /* ---------- render: settings ---------- */
 function renderSettings(){
   var c=Store.cfg,n=pendingCount();
-  var h='<div class="ses-head"><h2>Настройки</h2><span>Ночной лайм · версия 16</span></div>';
+  var h='<div class="ses-head"><h2>Настройки</h2><span>Ночной лайм · версия 17</span></div>';
   h+='<div class="panel"><h3>Apple Health</h3><p class="small muted mt8">Импорт сна и шагов из «Здоровья» через команду на iPhone. Ручные значения сохраняют приоритет.</p><div class="row mt8"><button class="btn" type="button" data-act="health-open">Импортировать сон и шаги</button><a class="text-button" href="health-setup.html" target="_blank" rel="noopener noreferrer">Инструкция</a></div></div>';
   h+='<div class="panel"><h3>Копия данных</h3><p class="small muted mt8">Все записи, включая ожидающие синхронизации. Токен доступа в файл не включается.</p><div class="row mt8"><button type="button" class="btn" data-act="download-backup">Скачать копию данных</button><button type="button" class="btn-ghost" data-act="download-upgrade-backup">Копия до обновления</button></div><p class="small muted mt8" id="backup-msg">'+esc(backupError)+'</p></div>';
   if(Store.state==='error'&&Store.err) h+='<div class="banner">'+esc(Store.err)+'</div>';
@@ -1454,6 +1496,8 @@ view.addEventListener('click',function(e){
       var sr=int(ri&&ri.value); if(sr==null) sr=int(ri&&ri.placeholder);
       if(!sr){ if(ri) ri.focus(); return; }
       var sw=sex&&sex.noWeight?null:num(wi&&wi.value); if(sw==null&&!(sex&&sex.noWeight)) sw=num(wi&&wi.placeholder);
+      // A weighted set without a weight is not a result: ask for the number instead of saving an empty one.
+      if(sw==null&&sex&&!sex.noWeight&&!sex.bw&&wi){ wi.focus(); return; }
       srows[si]=Object.assign({},srows[si],{w:sw,r:sr}); touchPath('workouts/'+S.date+'.json');
     }
     render(); startRest(+b.dataset.rest);
@@ -1506,6 +1550,7 @@ view.addEventListener('click',function(e){
     fdel.extra.splice(+b.dataset.i,1); touchFood(S.date); render();
   }
   else if(act==='show-measure'){ S.showMeasure=true; render(); var wi=document.getElementById('in-waist'); if(wi) wi.focus(); }
+  else if(act==='day-prog'){ S.dayProg={d:S.date,k:b.dataset.prog}; render(); }
   else if(act==='type'){ var wo=getW(S.date,true); if(wo.type===b.dataset.type) return; wo.type=b.dataset.type; touchPath('workouts/'+S.date+'.json'); render(); }
   else if(act==='addset'){
     var id=b.dataset.ex,n=+b.dataset.n,w=getW(S.date,true);
@@ -1552,7 +1597,7 @@ view.addEventListener('input',function(e){
     row[t.dataset.f]=t.dataset.f==='r'?int(t.value):num(t.value);
     rows[i]=row; touchPath('workouts/'+S.date+'.json');
     var setEl=t.closest('.set'); if(setEl) setEl.classList.toggle('done',row.r!=null&&row.r>0);
-    var cnt=sessionCount(wo.type||plannedType(S.date),S.date,weekOf(S.date),wo),wc=document.getElementById('wk-count'),wb=document.getElementById('wk-bar');
+    var cnt=sessionCount(typeOf(S.date),S.date,weekOf(S.date),wo),wc=document.getElementById('wk-count'),wb=document.getElementById('wk-bar');
     if(wc) wc.textContent=cnt.done+' из '+cnt.total+' подходов'; if(wb){ wb.max=cnt.total; wb.value=cnt.done; }
   } else if(t.dataset.run){
     var w2=getW(S.date,true); w2.run[t.dataset.run]=num(t.value); touchPath('workouts/'+S.date+'.json');

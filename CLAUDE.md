@@ -49,3 +49,8 @@ PWA без сборки и зависимостей: открывается с �
 - Разборы: `node tests/reviews-unit.cjs`, `node tests/reviews.cjs` (синтетические тексты, приватность и чтение без записи).
 - Браузерные (`mobile`, `daily-progress`, `health`, `data-preservation`): Playwright с системным Chrome (`channel: 'chrome'`), путь к пакету — через `NODE_PATH`. Данные синтетические.
 - Исторически у `tests/data-preservation.cjs` отмечалось падение «Read-only navigation/download never writes to the mock remote». На изолированной baseline v14 от 01.11.2026 оно не воспроизвелось (38 PASS; с переходом v13→v14 — 48 PASS). Старое падение не является основанием игнорировать новый FAIL.
+
+## Программы и прошлые циклы
+
+- `sessions` может содержать несколько программ; `programs` — `[{key,title,sessions:[…]}]` — группирует их для переключателя дня. Список тренировок — `sessionKeys()`, проверка типа — `isGymType()`, не жёсткий `['A','L','B']`.
+- `past` — закрытые циклы `{title,start,sessions,map}`: `findEx` и история упражнений ищут и там; `map` переводит старые типы дней в нынешние ключи (`typeOf(d)` для дат до `start`).

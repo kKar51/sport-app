@@ -61,6 +61,8 @@ equal([aw[0].target,aw[0].avg,aw[0].state,aw[0].basis],[83.3,83.06,'inside','sta
 equal([aw[1].target,aw[1].low,aw[1].high,aw[1].basis],[82.56,82.26,82.76,'actual'],'Week 2 target = week 1 average − 0,5');
 equal([aw[1].avg,aw[1].state],[82.05,'below'],'Week 2 is faster than the corridor');
 equal(St.weightAdvice(aw,2,0.5).kind,'below','Faster than planned → eat a little more');
+const early=St.adaptiveWeeks(real.slice(0,9),goal,8);
+equal([early[1].n,St.weightAdvice(early,2,0.5).kind],[2,'none'],'Two weigh-ins in a week give no calorie advice yet');
 const sparse=St.adaptiveWeeks([['2026-10-12',83.4],['2026-10-19',82.9]],goal,3);
 equal([sparse[1].target,sparse[1].basis,sparse[2].target],[82.8,'plan',82.3],'Without four weigh-ins the chain continues from targets');
 equal(St.adaptiveWeeks(real,{...goal,perWeek:0},2)[1].target,83.06,'Pace 0 holds the average of last week');

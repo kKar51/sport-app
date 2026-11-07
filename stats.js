@@ -107,6 +107,8 @@
   function weightAdvice(weeks,k,perWeek){
     var cur=weeks[k-1],prev=weeks[k-2];if(!cur) return null;
     if(cur.partial==null) return {kind:'none',text:'Замеров на этой неделе пока нет.'};
+    // One or two weigh-ins swing by a kilo with water and food, so no advice until the weekly average is reliable.
+    if(cur.avg==null) return {kind:'none',text:'Пока '+cur.n+' из 4 замеров — выводы по среднему, когда будет 4. Ничего не меняем.'};
     var gain=perWeek<0,maint=perWeek===0;
     if(cur.state==='inside') return {kind:'inside',text:'В коридоре: ничего не меняем.'};
     if(cur.state==='below') return {kind:'below',text:gain?'Набор медленнее цели: +150–200 ккал в день.':maint?'Вес уходит вниз: +150 ккал в день, чтобы держать вес.':'Худеешь быстрее цели. По правилам программы: +150–200 ккал в день, например творог 200 г с фруктом на перекус.'};
