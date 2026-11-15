@@ -41,6 +41,8 @@ const today='2026-10-17';
 equal(St.dayStatus('2026-10-12',{type:'A',sets:{bench:[{w:60,r:8}]}},'A',today),{kind:'gym',type:'A'},'Done gym day');
 equal(St.dayStatus('2026-10-14',{type:'rest',sets:{}},'L',today),{kind:'miss',type:'L'},'Planned legs not done is a miss');
 equal(St.dayStatus('2026-10-15',{type:'L',sets:{squat:[{w:70,r:10}]}},'rest',today),{kind:'gym',type:'L'},'Moved session counts on the day it was done');
+equal(St.dayStatus('2026-10-17',{type:'B',sets:{},run:{min:40,km:7.7}},'run',today),{kind:'run',type:'run'},'A day with only a run is a run day, whatever type was selected');
+equal(St.dayStatus('2026-10-17',{type:'B',sets:{ohp:[{w:35,r:10}]},run:{min:20}},'B',today),{kind:'gym',type:'B'},'Sets plus a run stay a gym day');
 equal(St.dayStatus('2026-10-18',null,'rest',today).kind,'rest','Future rest');
 equal(St.dayStatus('2026-10-19',null,'A',today).kind,'plan','Future gym is planned');
 equal(St.dayStatus(today,null,'run',today).kind,'today','Today not yet done');
@@ -89,6 +91,13 @@ ok(!/NaN|undefined/.test(svg),'No broken coordinates');
 ok(/data-x1="\d+"/.test(svg),'Chart carries its day range for taps');
 const two=St.weightChart({width:343,series:real,weeks:aw,today:'2026-10-23',range:'2w',trend:tl,forecast:fc});
 ok(!/NaN|undefined/.test(two)&&(two.match(/<circle class="st-dot/g)||[]).length===real.filter(p=>p[0]>='2026-10-10').length,'Two-week view');
+// History is not cut by a new cycle: weigh-ins before the current weeks stay on the "all" view, a new cycle is a marker.
+const before=[['2026-09-20',85],['2026-09-27',84.5]].concat(real);
+const all=St.weightChart({width:343,series:before,weeks:aw,today:'2026-10-23',range:'all',trend:tl,forecast:fc,marks:[{date:'2026-10-12',label:'цикл 2'}]});
+equal((all.match(/<circle class="st-dot/g)||[]).length,before.length,'All-time view keeps weigh-ins from before the cycle');
+ok(all.includes('st-cycle-mark')&&all.includes('цикл 2'),'Cycle start is drawn as a marker');
+const four=St.weightChart({width:343,series:before,weeks:aw,today:'2026-10-23',range:'4w',trend:tl,forecast:fc});
+equal((four.match(/<circle class="st-dot/g)||[]).length,before.filter(p=>p[0]>='2026-09-26').length,'Four-week view counts back 28 days from today');
 
 // Working sets, muscles and strength curve.
 equal(St.workingSets([{w:40,r:15},{w:60,r:10},{w:70,r:8},{w:70,r:null}]),[{w:60,r:10},{w:70,r:8}],'Warm-up under 70 % and empty rows are left out');
@@ -115,5 +124,23 @@ equal((bars.match(/<rect class="st-bar/g)||[]).length,2,'A missing day draws no 
 ok(bars.includes('st-bar low'),'Below-goal day is highlighted');
 ok(!/NaN|undefined/.test(St.gauge({width:300,value:0.5,min:0.4,max:0.6,good:0.45,ticks:[0.4,0.45,0.5,0.6]})),'Gauge renders');
 ok(!/NaN|undefined/.test(St.spark([['2026-10-12',76]]))&&!/NaN|undefined/.test(St.spark([['2026-10-12',76],['2026-10-19',80]])),'Sparkline with one and two points');
+
+// Weekly answers for the progress cards (synthetic numbers).
+equal(St.weekStart('2026-11-15'),'2026-11-09','Sunday belongs to the week that started on Monday');
+equal(St.weekStart('2026-11-09'),'2026-11-09','Monday starts its own week');
+const wcs=[['2026-11-02',80],['2026-11-03',80],['2026-11-04',80],['2026-11-05',80],['2026-11-09',79],['2026-11-10',79.1],['2026-11-11',78.9],['2026-11-12',79]];
+const wc=St.weekChange(wcs,'2026-11-15',{perWeek:0.5,band:[-0.3,0.2]});
+equal([wc.avg,wc.prevAvg,wc.change,wc.shown,wc.state],[79,80,-1,-1,'faster'],'A kilo in a week at pace 0,5 is faster than the zone');
+equal(wc.zone,[-0.8,-0.3],'Pace 0,5 gives the zone −0,8…−0,3');
+const wcIn=St.weekChange([['2026-11-02',80],['2026-11-03',80],['2026-11-04',80],['2026-11-05',80],['2026-11-09',79.16],['2026-11-10',79.16],['2026-11-11',79.16],['2026-11-12',79.16]],'2026-11-15',{perWeek:0.5,band:[-0.3,0.2]});
+equal([wcIn.shown,wcIn.state],[-0.8,'inside'],'−0,84 shows as −0,8 and is inside, so label and digits agree');
+const wcFew=St.weekChange(wcs.slice(0,7),'2026-11-15',{perWeek:0.5});
+equal([wcFew.n,wcFew.change,wcFew.state],[3,null,null],'Three weigh-ins this week: no change and no verdict');
+equal(St.weekChange(wcs,'2026-11-10',{perWeek:0.5}).n,2,'Days after today are not counted');
+equal(St.weekChange([],'2026-11-15',null).avg,null,'No weigh-ins, no average');
+const wk=[{from:'2026-10-12',n:3},{from:'2026-10-19',n:3},{from:'2026-10-26',n:1},{from:'2026-11-02',n:2},{from:'2026-11-09',n:3}];
+equal(St.streak(wk,'2026-11-15',2),2,'A week with one training ends the streak');
+equal(St.streak([...wk.slice(0,4),{from:'2026-11-09',n:1}],'2026-11-11',2),1,'An unfinished current week below the minimum does not break the streak');
+equal(St.streak([{from:'2026-11-09',n:0}],'2026-11-11',2),0,'No full weeks yet');
 
 console.log(`PASS: ${checks} stats checks: weekly weight plan and corridors, averages, trend, 1RM, tonnage, day status, goals, chart output.`);

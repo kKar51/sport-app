@@ -127,6 +127,9 @@
       parts.push('<text class="progress-x-label" x="' + coord(x(time)) + '" y="237" text-anchor="' + anchor + '">' + escape(dateLabel(time)) + '</text>');
     }
 
+    // A program change is a thin marker on the timeline, not a reason to cut the history.
+    const cycleMark = day(model.cycleStart);
+    if (cycleMark !== null && cycleMark > from && cycleMark <= to) parts.push('<line class="progress-cycle-mark" x1="' + coord(x(cycleMark)) + '" x2="' + coord(x(cycleMark)) + '" y1="' + top + '" y2="' + bottom + '"/><text class="progress-cycle-label" x="' + coord(x(cycleMark) + 4) + '" y="' + (top + 10) + '">новый цикл</text>');
     const selected = day(settings.selectedDate);
     if (selected !== null && selected >= from && selected <= to) parts.push('<line class="progress-selected-guide" x1="' + coord(x(selected)) + '" x2="' + coord(x(selected)) + '" y1="' + top + '" y2="' + bottom + '"/>');
     if (bars) {

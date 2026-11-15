@@ -12,6 +12,7 @@ PWA без сборки и зависимостей: открывается с �
 | `progress.js`, `progress-view.js` | Модель и график страниц отдельной метрики (вес, сон, шаги, замеры, упражнение) |
 | `health.js` | Разбор импорта Apple Health (`SPORT_HEALTH_V1`) |
 | `reviews.js`, `reviews.css` | Приватные Markdown-разборы: допустимые пути, безопасное отображение, список и оформление |
+| `glass.css` | Стиль «Стекло» (v18): грузится последним и перекрывает «Ночной лайм»; панели, шторки `.sh`, карточки «Прогресса» `.pg-*`, таблица подходов `.set.g` |
 | `sw.js` | Офлайн-кеш оболочки, network-first |
 | `health-setup.html` | Инструкция по команде iPhone |
 
@@ -26,7 +27,8 @@ PWA без сборки и зависимостей: открывается с �
 | data edits | `getW`, `bodyGet/bodySet`, `bodySeries`, `foodDay` |
 | render: today | `sessionBlock` (подходы, цель, гриф), `targetFor` (двойная прогрессия), `finishSummary`, таймер `startRest/runRest` |
 | render: food | `renderFood`, `foodTotals` |
-| render: progress tab | `weightModel`, `weightCard`, `strengthRows`, `volumeSection`, `renderStats` |
+| render: progress tab | `renderStats` (4 карточки), `statSheet(kind)` (детали в шторке), `weightWeek`, `trainingWeeks`, `readySlots`, `skillRows`; старые `weightCard`/`strengthSection`/`volumeSection` пока не удалены |
+| sheets (после render: header) | `renderSheets`, `sheetWrap`, `tipBtn` — шторки внутри `#view`, кнопки через общий `data-act`: `tip`, `sheet-open/close`, `swap-open/close`, `calendar-*` |
 | render: root / events | `render()`, `paintMeters`, `paintStagger`, один обработчик кликов по `data-act` |
 | render: reviews | `renderReviews`, `review-open`, `review-list`; тексты только читаются из `Store.files` |
 

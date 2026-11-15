@@ -82,13 +82,17 @@
     opts=opts&&typeof opts==='object'?opts:{};
     var today=dayNumber(opts.today);
     if(today===null) throw new RangeError('Progress today must be a valid YYYY-MM-DD date');
-    var period=opts.period===7||opts.period===30||opts.period==='cycle'?opts.period:30;
+    // History periods do not depend on the training program: a new cycle must not hide earlier records.
+    // 7, 30 and 'cycle' are kept for callers that still pass them.
+    var period=[7,28,30,90,'all','cycle'].indexOf(opts.period)>=0?opts.period:90;
+    var history=historyFrom(series,today),byDay=Object.create(null);
     var cycle=dayNumber(opts.cycleStart),from;
     if(period==='cycle') from=cycle===null?today-29:Math.min(today,cycle);
-    else from=today-period+1;
+    else if(period==='all') from=history.length?history[0].day:today-29;
+    // A long period starts no earlier than the first record (but still shows at least a week).
+    else from=Math.max(today-period+1,history.length?Math.min(history[0].day,today-6):-Infinity);
     from=Math.max(MIN_DAY,today-MAX_DAYS+1,from);
 
-    var history=historyFrom(series,today),byDay=Object.create(null);
     history.forEach(function(point){ byDay[point.day]=point; });
     var points=[];
     for(var day=from;day<=today;day++){
@@ -119,8 +123,12 @@
         if(distance<bestDistance){ baseline=point; bestDistance=distance; }
       });
     }
-    var cycleHistory=cycle!==null&&cycle<=today?inRange(history,cycle,today):[];
-    var sinceStart=cycleHistory.length>=2?difference(cycleHistory[cycleHistory.length-1].value,cycleHistory[0].value):null;
+    // Since the first record: body weight compares weekly averages (single mornings swing by a kilo), tape measurements compare single values.
+    var sinceStart=null;
+    if(history.length>=2&&(kind==='weights'||measurement)){
+      var startMean=kind==='weights'?mean(inRange(history,first.day,first.day+6),4):null;
+      sinceStart=startMean!==null&&latestMean!==null&&summaryFrom>first.day+6?difference(latestMean,startMean):difference(last.value,first.value);
+    }
 
     return {
       kind:kind,from:dateString(from),to:opts.today,points:points,count:known.length,totalDays:points.length,
@@ -128,7 +136,7 @@
       previousCount:previous.length,previousMean:previousMean,delta:delta,
       goalDays:goalDays,summaryGoalDays:summaryGoalDays,
       change:baseline?difference(last.value,baseline.value):null,changeFrom:baseline?baseline.date:null,
-      sinceStart:sinceStart,firstDate:first?first.date:null,lastDate:last?last.date:null
+      sinceStart:sinceStart,sinceFrom:sinceStart===null?null:first.date,cycleStart:cycle!==null&&cycle>from&&cycle<=today?dateString(cycle):null,firstDate:first?first.date:null,lastDate:last?last.date:null
     };
   }
   return {build:build,validDate:validDate,addDays:addDays};

@@ -117,6 +117,32 @@
     return {kind:twice?'above2':'above',text:twice?'Вторая неделя выше коридора: сначала добавь шаги, потом −150 ккал на ужине.':'Выше коридора одну неделю — пока ничего не меняем, смотрим следующую.'};
   }
 
+  /* ---------- weekly answers for the progress cards ---------- */
+  // Monday of the ISO week that contains the date.
+  function weekStart(date){ var n=dayNum(date),dow=((n+3)%7+7)%7; return dateOf(n-dow); }
+  // Weight change this week: mean Mon–Sun minus last week's mean, both with at least four weigh-ins.
+  // The verdict uses the number rounded to 0,1 kg, so the label never contradicts the digits on screen.
+  function weekChange(series,today,goal){
+    var mon=weekStart(today),prevMon=addDays(mon,-7),t=dayNum(today);
+    var pick=function(from){ var a=dayNum(from),b=Math.min(a+6,t); return series.filter(function(p){ var d=dayNum(p[0]); return d!=null&&d>=a&&d<=b&&num(p[1]); }).map(function(p){ return p[1]; }); };
+    var cur=pick(mon),prev=pick(prevMon),res={from:mon,n:cur.length,avg:cur.length?round(mean(cur),2):null,prevN:prev.length,prevAvg:prev.length?round(mean(prev),2):null,change:null,shown:null,state:null,zone:null};
+    if(cur.length>=4&&prev.length>=4){ res.change=round(res.avg-res.prevAvg,2); res.shown=round(res.change,1); }
+    if(goal&&num(goal.perWeek)){
+      var band=Array.isArray(goal.band)&&num(goal.band[0])&&num(goal.band[1])?goal.band:[-0.3,0.2];
+      res.zone=[round(-goal.perWeek+band[0],2),round(-goal.perWeek+band[1],2)];
+      if(res.shown!=null) res.state=res.shown<res.zone[0]-1e-9?'faster':res.shown>res.zone[1]+1e-9?'slower':'inside';
+    }
+    return res;
+  }
+  // Weeks in a row with at least `min` trainings. The current week joins the streak once it reaches the minimum;
+  // until then it neither counts nor breaks it. `weeks` is [{from, n}] for every week, oldest first.
+  function streak(weeks,today,min){
+    var mon=weekStart(today),k=0,i=weeks.length-1;
+    if(i>=0&&weeks[i].from===mon&&weeks[i].n<min) i--;
+    for(;i>=0;i--){ if(weeks[i].n>=min) k++; else break; }
+    return k;
+  }
+
   /* ---------- training ---------- */
   // Working sets only: a weighted set lighter than 70 % of the session's top weight is a warm-up.
   // With a counterweight (assisted pull-ups) a heavier number is easier, so nothing is dropped there.
@@ -168,15 +194,18 @@
     Object.keys(sets||{}).forEach(function(id){ (sets[id]||[]).forEach(function(s){ if(s&&num(s.w)&&s.w>0&&num(s.r)&&s.r>0) t+=s.w*s.r; }); });
     return t;
   }
+  function hasSets(w){ return !!w&&Object.keys(w.sets||{}).some(function(id){return (w.sets[id]||[]).some(function(s){return s&&num(s.r)&&s.r>0;});}); }
   function recorded(w){
     if(!w) return false;
-    var sets=Object.keys(w.sets||{}).some(function(id){return (w.sets[id]||[]).some(function(s){return s&&num(s.r)&&s.r>0;});});
+    var sets=hasSets(w);
     return sets||!!(w.run&&((num(w.run.min)&&w.run.min>0)||(num(w.run.km)&&w.run.km>0)));
   }
   // One cell per day: what was done, or what was planned and missed.
   function dayStatus(date,workout,planned,today){
     var done=recorded(workout),type=workout&&workout.type;
-    if(done) return {kind:type==='run'?'run':'gym',type:type||planned};
+    // A day with only a run is a run day, whatever session type was selected before running.
+    if(done&&(type==='run'||!hasSets(workout))) return {kind:'run',type:'run'};
+    if(done) return {kind:'gym',type:type||planned};
     if(date>today) return {kind:planned==='rest'?'rest':'plan',type:planned};
     if(date===today) return {kind:planned==='rest'?'rest':'today',type:planned};
     return {kind:planned==='rest'?'rest':'miss',type:planned};
@@ -209,11 +238,14 @@
     var W=Math.max(260,Math.round(o.width||340)),H=210,L=34,R=40,T=14,B=24;
     var weeks=o.weeks||[],series=o.series||[],today=o.today,t=dayNum(today);if(!weeks.length) return '';
     var first=series.length?dayNum(series[0][0]):t;
-    var x0=o.range==='cycle'?Math.min(dayNum(weeks[0].from),Math.max(first,dayNum(weeks[0].from)-7)):t-13,x1=t+7;
+    // History is not cut by the program: '4w' and '3m' count back from today, 'all' (and the old 'cycle') start at the first weigh-in.
+    // A period never starts before the first weigh-in, so a short history does not leave an empty left half.
+    var span={'2w':14,'4w':28,'3m':90}[o.range],x0=Math.max(span?t-span+1:-Infinity,Math.min(first,t-13)),x1=t+7;
     var cur=Math.floor((t-dayNum(weeks[0].from))/7)+1;
     var inX=function(d){var n=dayNum(d);return n>=x0&&n<=x1;};
     var pts=series.filter(function(p){return inX(p[0])&&dayNum(p[0])<=t;}),tr=(o.trend||[]).filter(function(p){return inX(p[0]);}),fc=(o.forecast||[]).filter(function(p){return inX(p[0]);});
-    var shown=weeks.filter(function(w){return w.week<=cur+1&&dayNum(w.to)>=x0&&dayNum(w.from)<=x1;});
+    // With `onlyCurrent` the target is one zone for this week instead of a corridor for every week.
+    var shown=weeks.filter(function(w){return (o.onlyCurrent?w.week===cur:w.week<=cur+1)&&dayNum(w.to)>=x0&&dayNum(w.from)<=x1;});
     var vals=pts.map(function(p){return p[1];});
     tr.forEach(function(p){vals.push(p[1]);}); fc.forEach(function(p){vals.push(p[2],p[3]);}); shown.forEach(function(w){vals.push(w.low,w.high);});
     if(!vals.length) return '';
@@ -233,10 +265,12 @@
       g+='<text class="st-val" x="'+(x(dayNum(end[0]))+4).toFixed(1)+'" y="'+(y(end[1])+4).toFixed(1)+'">≈'+ru(end[1])+'</text>';
     }
     if(tr.length>1) g+='<path class="st-trend draw" pathLength="1" d="'+tr.map(function(p,i){return (i?'L':'M')+x(dayNum(p[0])).toFixed(1)+' '+y(p[1]).toFixed(1);}).join(' ')+'"/>';
+    (o.marks||[]).forEach(function(mk){ var n=dayNum(mk.date); if(n!=null&&n>x0&&n<=t) g+='<line class="st-cycle-mark" x1="'+x(n).toFixed(1)+'" x2="'+x(n).toFixed(1)+'" y1="'+T+'" y2="'+(H-B)+'"/><text class="st-lbl st-cycle-label" x="'+(x(n)+4).toFixed(1)+'" y="'+(T+9)+'">'+esc(mk.label)+'</text>'; });
     var sel=o.selected&&inX(o.selected)?o.selected:null;
     if(sel) g+='<line class="st-sel" x1="'+x(dayNum(sel)).toFixed(1)+'" x2="'+x(dayNum(sel)).toFixed(1)+'" y1="'+T+'" y2="'+(H-B)+'"/>';
     pts.forEach(function(p,i){ var last=i===pts.length-1,on=p[0]===sel; g+='<circle class="st-dot'+(last?' last':'')+(on?' on':'')+'" data-i="'+i+'" cx="'+x(dayNum(p[0])).toFixed(1)+'" cy="'+y(p[1]).toFixed(1)+'" r="'+(on?5.5:last?4.5:3)+'"><title>'+short(p[0])+': '+ru(p[1])+' кг</title></circle>'; });
-    [[x0,'start'],[t,'middle'],[x1,'end']].forEach(function(k){ g+='<text class="st-lbl'+(k[0]===t?' strong':'')+'" x="'+x(k[0]).toFixed(1)+'" y="'+(H-6)+'" text-anchor="'+k[1]+'">'+(k[0]===t?'сегодня':short(dateOf(k[0])))+'</text>'; });
+    // Edge dates that would overlap "сегодня" on a long period are left out.
+    [[x0,'start'],[t,'middle'],[x1,'end']].filter(function(k){ return k[0]===t||Math.abs(x(k[0])-x(t))>=60; }).forEach(function(k){ g+='<text class="st-lbl'+(k[0]===t?' strong':'')+'" x="'+x(k[0]).toFixed(1)+'" y="'+(H-6)+'" text-anchor="'+k[1]+'">'+(k[0]===t?'сегодня':short(dateOf(k[0])))+'</text>'; });
     var label='Вес: '+pts.length+' утренних замеров, линия тренда, коридор недели'+(fc.length?' и прогноз до '+short(fc[fc.length-1][0]):'');
     return '<svg class="st-chart" data-chart="weight" data-x0="'+x0+'" data-x1="'+x1+'" data-l="'+L+'" data-r="'+R+'" width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(label)+'">'+g+'</svg>';
   }
@@ -353,7 +387,7 @@
     return '<svg class="st-chart" width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Талия к росту '+ru(o.value,2)+', цель ниже '+ru(o.good,2)+'">'+g+'</svg>';
   }
 
-  return {gauge:gauge,dayNum:dayNum,addDays:addDays,weightPlan:weightPlan,weeklyAverages:weeklyAverages,trend:trend,
+  return {gauge:gauge,dayNum:dayNum,addDays:addDays,weekStart:weekStart,weekChange:weekChange,streak:streak,weightPlan:weightPlan,weeklyAverages:weeklyAverages,trend:trend,
     localFit:localFit,trendLine:trendLine,pace:pace,forecast:forecast,adaptiveWeeks:adaptiveWeeks,weightAdvice:weightAdvice,
     workingSets:workingSets,muscleSets:muscleSets,workingTonnage:workingTonnage,logFit:logFit,strengthIndex:strengthIndex,
     liftChart:liftChart,muscleChart:muscleChart,typeVolume:typeVolume,indexChart:indexChart,

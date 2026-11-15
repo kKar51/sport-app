@@ -125,7 +125,8 @@ for (const kind of ['waist', 'lower']) {
   ], options({ period: 30, cycleStart: '2026-09-15' }));
   equal(result.changeFrom, '2026-09-16', `${kind}: equal-distance four-week candidates choose a consistent date`);
   equal(result.change, -5, `${kind}: comparison uses the selected four-week baseline`);
-  equal(result.sinceStart, -5, `${kind}: cycle change excludes measurements before the cycle`);
+  equal(result.sinceStart, -10, `${kind}: change since the first record does not depend on the training cycle`);
+  equal(result.sinceFrom, '2026-09-01', `${kind}: the change names the date of the first record`);
   equal(result.mean, null, `${kind}: no invented weekly tape-measurement average`);
   const sparse = P.build(kind, [['2026-10-01', 92], [TODAY, 90]], options({ cycleStart: '2026-10-01' }));
   equal(sparse.change, null, `${kind}: a two-week gap cannot be labelled a four-week change`);
@@ -151,7 +152,24 @@ for (const kind of ['waist', 'lower']) {
   equal(result.sinceStart, 1, 'Cycle baseline can precede the bounded display');
   equal(P.build('weights', [], options({ period: 'cycle', cycleStart: '2027-01-01' })).totalDays, 1, 'A future cycle still displays today without future points');
   equal(P.build('weights', [], options({ period: 'cycle', cycleStart: 'bad' })).totalDays, 30, 'An invalid cycle date falls back to a bounded calendar range');
-  equal(P.build('weights', [], options({ period: 999999 })).totalDays, 30, 'An invalid period cannot request unlimited points');
+  equal(P.build('weights', [], options({ period: 999999 })).totalDays, 90, 'An invalid period cannot request unlimited points');
+}
+
+// History periods: four weeks, three months and all time do not depend on the cycle start.
+{
+  const weights = [];
+  for (let i = 0; i < 40; i++) weights.push([P.addDays('2026-09-06', i), 84 - i * 0.1]);
+  const all = P.build('weights', weights, options({ period: 'all', cycleStart: '2026-10-12' }));
+  equal(all.from, '2026-09-06', 'All time starts at the first record, not at the cycle start');
+  equal(all.cycleStart, '2026-10-12', 'A cycle start inside the period is returned for a chart marker');
+  equal(P.build('weights', weights, options({ period: 28, cycleStart: '2026-10-12' })).totalDays, 28, 'Four weeks are 28 dates');
+  equal(P.build('weights', weights, options({ period: 90 })).totalDays, 40, 'Three months start no earlier than the first record');
+  equal(P.build('weights', weights.concat([['2026-06-01', 86]]), options({ period: 90 })).totalDays, 90, 'Three months are 90 dates when history is longer');
+  equal(P.build('weights', weights, options({ period: 28, cycleStart: '2026-09-01' })).cycleStart, null, 'A cycle start before the period is not marked');
+  equal(P.build('weights', [], options({ period: 'all' })).totalDays, 30, 'All time without records shows a bounded empty range');
+  // Weight since the first record compares weekly averages: first week 84…83.4, last seven days 80.7…80.1.
+  ok(Math.abs(all.sinceStart - ((80.7 + 80.1) / 2 - (84 + 83.4) / 2)) < 1e-6, 'Weight since start compares the first week with the last seven days');
+  equal(all.sinceFrom, '2026-09-06', 'Weight change names the first record date');
 }
 
 // Empty results, invalid options, input immutability, and browser export contract.
