@@ -131,11 +131,12 @@ body.sheet-open{overflow:hidden}
 .set-ok[aria-pressed="true"] i{background:var(--good);border-color:var(--good);color:var(--on-accent);opacity:1}
 .ex-foot{display:flex;justify-content:flex-start!important;gap:24px!important;margin:4px 0 0 24px}
 .ex-foot .text-button{min-height:44px;padding:0;font-size:14px}
-/* swipe to remove: the card content slides, ✕ waits underneath on the right */
-.ex[data-swipe]{position:relative;overflow:hidden}
-.ex-in{position:relative;z-index:1;transition:transform .2s ease;background:inherit}
-.ex-del{position:absolute;top:0;right:0;bottom:0;width:72px;border:0;background:rgba(255,170,165,.16);color:var(--bad);font-size:22px;z-index:0;opacity:0;cursor:pointer}
-.ex.swiped .ex-del,.ex-del:focus-visible{opacity:1}
+/* swipe to remove: the whole card slides left, ✕ waits behind it on the page background */
+.ex-row{position:relative;list-style:none}
+.ex-row>.ex{position:relative;z-index:1;transition:transform .22s cubic-bezier(.2,.8,.2,1);will-change:transform}
+.ex-row.dragging>.ex{transition:none}
+.ex-del{position:absolute;top:0;right:0;bottom:0;width:68px;border:0;border-radius:20px;background:rgba(255,170,165,.18);color:var(--bad);font-size:22px;z-index:0;opacity:0;transition:opacity .15s;cursor:pointer}
+.ex-row.swiped .ex-del,.ex-del:focus-visible{opacity:1}
 .ex-del:focus-visible{z-index:2}
 .ex-hidden{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 4px 4px 16px;font-size:14px;color:var(--muted)}
 .ex-hidden .text-button{min-height:44px;padding:0 12px}
@@ -164,6 +165,7 @@ body.sheet-open{overflow:hidden}
 .pg-spark svg{display:block;width:100%;height:auto;max-height:72px}
 .pg-foot{display:block;font-size:14px;color:var(--muted);margin-top:8px}
 .pg-svg{overflow:visible}
+.pg-spark .st-lbl{display:none}
 .pg-line{fill:none;stroke:var(--series);stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
 .pg-area{fill:var(--series);opacity:.14}
 .pg-pt{fill:var(--bg);stroke:var(--series);stroke-width:2}
@@ -220,6 +222,10 @@ button.sh-row{cursor:pointer}
 .sh .st-paces small{font-size:12px;opacity:.75}
 .sh .text-button{margin-top:8px;min-height:44px;padding:0}
 .sh svg.st-chart{display:block;width:100%;height:auto}
+.sh-read{min-height:24px;margin:0 0 4px;font-size:14px;color:var(--ink)}
+.sh-read b{font-weight:600}
+.sh-read.muted{color:var(--muted)}
+[data-bars]{cursor:pointer}
 .sh-link{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:56px;margin-top:16px;padding:8px 16px;border:1px solid var(--glass-line);border-radius:16px;background:var(--glass-2);color:var(--ink);font:inherit;font-size:16px;font-weight:600;text-align:left;cursor:pointer}
 .sh-link small{display:block;font-size:12px;font-weight:400;color:var(--muted)}
 .sh-link svg{color:var(--accent);flex:none}

@@ -720,7 +720,7 @@ function exItem(slot,ex,i,d,w,wo,ses){
   // How-to and the weight rule live under ⓘ; the screen keeps the name, the plan and the sets.
   var why=!slot?'Добавлено только в эту тренировку.':ex.cross?'Замена из другой программы вместо «'+slot.name+'», только на сегодня.':ex.isAlt?'Замена вместо «'+slot.name+'». Выбор запомнится, у каждого упражнения своя история.':'';
   var tip=[ex.cue,wn,why].filter(Boolean).join(' ');
-  var h='<li class="ex glass'+(doneN>=planned?' ex-done':'')+'" data-swipe="1"><div class="ex-in"><div class="ex-top"><span class="ex-n">'+(slot?i+1:'+')+'</span><div class="ex-name"><h3>'+esc(ex.name)+'</h3>'+tipBtn(tip,ex.name)+'</div></div>'+
+  var h='<li class="ex-row" data-swipe="1"><div class="ex glass ex-in'+(doneN>=planned?' ex-done':'')+'"><div class="ex-top"><span class="ex-n">'+(slot?i+1:'+')+'</span><div class="ex-name"><h3>'+esc(ex.name)+'</h3>'+tipBtn(tip,ex.name)+'</div></div>'+
     '<p class="target">'+planned+' × '+esc(dash(ex.reps))+(ex.repsUnit?' '+esc(ex.repsUnit):'')+(ex.perSide?' на сторону':'')+' · отдых '+esc(ex.rest)+(ss?' · '+esc(ss.toLowerCase()):'')+(ex.cross?' · из другой программы':'')+'</p>';
   if(hn.cls==='up') h+='<p class="up-badge">↑ '+esc(hn.advice.replace(/^Пора (усложнить|прибавить): /,''))+'</p>';
   else if(!last&&!t0&&hn.advice&&ex.start) h+='<p class="target">'+esc(hn.advice)+'</p>';
@@ -1309,7 +1309,10 @@ function weekWeightSpark(series){
   var line=pts.map(function(p,i){return (i?'L':'M')+x(i).toFixed(1)+' '+y(p[1]).toFixed(1);}).join(' '),last=pts[pts.length-1];
   return '<svg class="pg-svg" viewBox="0 0 '+W+' '+H+'" aria-hidden="true"><path class="pg-area" d="'+line+' L'+x(pts.length-1).toFixed(1)+' '+H+' L'+x(0)+' '+H+' Z"/><path class="pg-line" d="'+line+'"/>'+pts.map(function(p,i){return '<circle class="pg-pt'+(i===pts.length-1?' last':'')+'" cx="'+x(i).toFixed(1)+'" cy="'+y(p[1]).toFixed(1)+'" r="'+(i===pts.length-1?4:2.5)+'"/>';}).join('')+'<text class="pg-val" x="'+(x(pts.length-1)+8).toFixed(1)+'" y="'+(y(last[1])+4).toFixed(1)+'">'+fmtN(Math.round(last[1]*10)/10)+'</text></svg>';
 }
-function sleepWeek(){ var today=todayStr(),mon=monday(today),v=[],pv=[]; for(var i=0;i<7;i++){ var d=addDays(mon,i),q=addDays(mon,i-7); if(d<=today&&bodyGet(d,'sleep')!=null) v.push(bodyGet(d,'sleep')); if(bodyGet(q,'sleep')!=null) pv.push(bodyGet(q,'sleep')); } var a=function(x){return x.length?x.reduce(function(s,y){return s+y;},0)/x.length:null;}; return {avg:a(v),n:v.length,prev:a(pv)}; }
+function sleepWeek(){ var today=todayStr(),mon=monday(today),v=[],pv=[]; for(var i=0;i<7;i++){ var d=addDays(mon,i),q=addDays(mon,i-7); if(d<=today&&bodyGet(d,'sleep')!=null) v.push(bodyGet(d,'sleep')); if(bodyGet(q,'sleep')!=null) pv.push(bodyGet(q,'sleep')); } var a=function(x){return x.length?x.reduce(function(s,y){return s+y;},0)/x.length:null;};
+  // Monday before the first synced night: show last week rather than a dash, like the weight card.
+  if(!v.length&&pv.length) return {avg:a(pv),n:pv.length,prev:null,fallback:true};
+  return {avg:a(v),n:v.length,prev:a(pv)}; }
 function stepsWeek(){ var today=todayStr(),mon=monday(today),v=[]; for(var i=0;i<7;i++){ var d=addDays(mon,i); if(d<today&&bodyGet(d,'steps')!=null) v.push(bodyGet(d,'steps')); } if(!v.length){ for(var j=1;j<=7;j++){ var q=addDays(today,-j); if(bodyGet(q,'steps')!=null) v.push(bodyGet(q,'steps')); } } return v.length?v.reduce(function(s,y){return s+y;},0)/v.length:null; }
 function hm(h){ var m=Math.round(h*60); return Math.floor(m/60)+' ч '+pad(m%60)+' мин'; }
 function renderStats(){
@@ -1326,7 +1329,7 @@ function renderStats(){
   h+=card('strength','Сила и навыки',ok.length?ok.length+' '+plural(ok.length,'упражнение готово','упражнения готовы','упражнений готовы')+' к ступени ↑':'Растём по лесенкам','','',String(ok.length),'из '+ready.length,ladderBar(ok.length,Math.max(ready.length,1)),esc(names?names+(ok.length>3?' и ещё '+(ok.length-3):''):'')+(lastL?esc((names?' · ':'')+lift.ex.name.split(' ')[0].toLowerCase()+' '+setTxt(lift.ex,lastL.row)):''));
   h+=card('reg','Регулярность','На этой неделе '+cw.n+' из '+(g.gym||3),'','',String(str),plural(str,'неделя','недели','недель')+' подряд',weeksDots(weeks),'бег '+cw.run+' на этой неделе');
   var bars=[]; for(var j=6;j>=0;j--){ var dd=addDays(todayStr(),-j); bars.push([dd,bodyGet(dd,'sleep')]); }
-  h+=card('rec','Сон и шаги','Сон',sl.avg!=null&&sl.avg>=sleepGoal?'good':'warn',sl.avg==null?'':sl.avg>=sleepGoal?'в цели':'ниже цели '+sleepGoal+' ч',sl.avg!=null?Math.floor(sl.avg)+':'+pad(Math.round(sl.avg%1*60)):'—','в среднем',SportStats.barChart({width:170,data:bars,goal:sleepGoal,ticks:[],label:'Сон за 7 ночей'}),st!=null?'Шаги <span class="'+(st>=stepsGoal?'good':'warn')+'">'+thousands(Math.round(st/100)*100)+' · '+(st>=stepsGoal?'в цели':'ниже цели')+'</span>':'');
+  h+=card('rec','Сон и шаги',sl.fallback?'Сон за прошлую неделю':'Сон',sl.avg!=null&&sl.avg>=sleepGoal?'good':'warn',sl.avg==null?'':sl.avg>=sleepGoal?'в цели':'ниже цели '+sleepGoal+' ч',sl.avg!=null?Math.floor(sl.avg)+':'+pad(Math.round(sl.avg%1*60)):'—','в среднем',SportStats.barChart({width:170,data:bars,goal:sleepGoal,ticks:[],label:'Сон за 7 ночей'}),st!=null?'Шаги <span class="'+(st>=stepsGoal?'good':'warn')+'">'+thousands(Math.round(st/100)*100)+' · '+(st>=stepsGoal?'в цели':'ниже цели')+'</span>':'');
   h+='<section class="glass pg-links">'+[['history','История тренировок'],['body','Вес и замеры'],['reviews','Итоги недели и разборы'],['program','Программа']].map(function(x){ return '<button type="button" class="td-row" data-act="navigate" data-tab="'+x[0]+'"'+(x[0]==='body'?' data-date="'+todayStr()+'"':'')+'><span class="td-row-t">'+x[1]+'</span><span class="td-row-v"></span><span class="chev" aria-hidden="true">'+uiIcon('right')+'</span></button>'; }).join('')+'</section>';
   return h;
 }
@@ -1341,6 +1344,9 @@ function statSheet(kind){
     var sinceM=SportProgress.build('weights',series,{today:today,period:'all'}).sinceStart,waist=bodySeries('waist').filter(function(x){return x[0]<=today;});
     var h='<h2>'+(c.shown!=null?esc(signed(c.shown,'кг'))+(c.fallback?' за прошлую неделю':' за неделю')+' <span class="'+(c.state==='inside'?'good':'warn')+'">· '+esc(weightState(c))+'</span>':'Вес · '+c.n+' из 4 замеров')+'</h2>';
     h+='<div class="st-seg sh-seg" role="group" aria-label="Период">'+[['4w','4 недели'],['3m','3 месяца'],['all','Всё время']].map(function(x){return '<button type="button" data-act="stats-range" data-range="'+x[0]+'" aria-pressed="'+(range===x[0])+'">'+x[1]+'</button>';}).join('')+'</div>';
+    // Tapping the chart picks a day; its weigh-in and that week's average show in one line above the chart.
+    var sel=S.statsSel,sv=sel?bodyGet(sel,'weights'):null,sw=sel?(byW[monday(sel)]||[]):[];
+    h+='<p class="sh-read'+(sel?'':' muted')+'" aria-live="polite">'+(sel?'<b>'+esc(fmtDay(sel))+'</b> · '+(sv!=null?fmtN(sv)+' кг':'замера нет')+(sw.length>=4?' · неделя '+fmtN(Math.round(sw.reduce(function(a,b){return a+b;},0)/sw.length*10)/10):''):'Нажми на точку — покажу день')+'</p>';
     h+='<div id="stats-weight">'+chart+'</div>';
     if(c.fallback) h+=sheetRow('Эта неделя',c.curN+' из 4 замеров','muted');
     h+=sheetRow(c.fallback?'Средний за прошлую неделю':'Средний за неделю',(c.avg!=null?fmtN(Math.round(c.avg*10)/10)+' кг':'—')+' <small>'+c.n+' из 7</small>');
@@ -1377,10 +1383,12 @@ function statSheet(kind){
   if(kind==='rec'){
     var kd=S.statsDaily||'sleep',sl=sleepWeek(),st=stepsWeek(),days=[],sg=g.sleep||7,stg=g.steps||8000;
     for(var j=13;j>=0;j--){ var dd=addDays(today,-j); if(kd==='steps'&&dd===today) continue; days.push([dd,bodyGet(dd,kd)]); }
-    var h4='<h2>'+(kd==='sleep'?(sl.avg!=null?'Сон '+hm(sl.avg)+' <span class="'+(sl.avg>=sg?'good':'warn')+'">· '+(sl.avg>=sg?'в цели':'ниже цели '+sg+' ч')+'</span>':'Сон'):(st!=null?thousands(Math.round(st/100)*100)+' шагов <span class="'+(st>=stg?'good':'warn')+'">· '+(st>=stg?'в цели':'ниже цели')+'</span>':'Шаги'))+'</h2>';
+    var h4='<h2>'+(kd==='sleep'?(sl.avg!=null?(sl.fallback?'Сон за прошлую неделю ':'Сон ')+hm(sl.avg)+' <span class="'+(sl.avg>=sg?'good':'warn')+'">· '+(sl.avg>=sg?'в цели':'ниже цели '+sg+' ч')+'</span>':'Сон'):(st!=null?thousands(Math.round(st/100)*100)+' шагов <span class="'+(st>=stg?'good':'warn')+'">· '+(st>=stg?'в цели':'ниже цели')+'</span>':'Шаги'))+'</h2>';
     h4+='<div class="st-seg sh-seg" role="group" aria-label="Показатель">'+[['sleep','Сон'],['steps','Шаги']].map(function(x){return '<button type="button" data-act="stats-daily" data-kind="'+x[0]+'" aria-pressed="'+(kd===x[0])+'">'+x[1]+'</button>';}).join('')+'</div>';
-    h4+=days.some(function(x){return x[1]!=null;})?SportStats.barChart(kd==='steps'?{width:width,data:days,goal:stg,ticks:[0,10000,20000],tickLabel:function(v){return v/1000+'k';},valueLabel:thousands,label:'Шаги за 13 дней'}:{width:width,data:days,goal:sg,ticks:[0,sg],tickLabel:function(v){return v+' ч';},valueLabel:function(v){return fmtN(Math.round(v*10)/10)+' ч';},label:'Сон за 14 ночей'}):'<p class="muted small">За 14 дней записей нет.</p>';
-    if(kd==='sleep') h4+=sheetRow('Среднее за неделю',sl.avg!=null?hm(sl.avg):'—',sl.avg!=null&&sl.avg>=sg?'good':'warn')+(sl.prev!=null?sheetRow('Прошлая неделя',hm(sl.prev)):'')+'<div class="sh-row"><span>Ночей меньше 6 ч '+tipBtn('Ночь меньше 6 часов — вместо зала прогулка.','Короткий сон')+'</span><b>'+days.filter(function(x){return x[1]!=null&&x[1]<6&&x[0]>=monday(today);}).length+'</b></div>';
+    var rs=S.recSel&&days.some(function(x){return x[0]===S.recSel;})?S.recSel:null,rv=rs?bodyGet(rs,kd):null;
+    h4+='<p class="sh-read'+(rs?'':' muted')+'" aria-live="polite">'+(rs?'<b>'+esc(fmtDay(rs))+'</b> · '+(rv==null?'нет записи':kd==='sleep'?hm(rv):thousands(rv)+' шагов'):'Нажми на столбик — покажу день')+'</p>';
+    h4+=days.some(function(x){return x[1]!=null;})?'<div data-bars="'+days.map(function(x){return x[0];}).join(',')+'">'+SportStats.barChart(kd==='steps'?{width:width,data:days,goal:stg,ticks:[0,10000,20000],tickLabel:function(v){return v/1000+'k';},valueLabel:thousands,label:'Шаги за 13 дней'}:{width:width,data:days,goal:sg,ticks:[0,sg],tickLabel:function(v){return v+' ч';},valueLabel:function(v){return fmtN(Math.round(v*10)/10)+' ч';},label:'Сон за 14 ночей'})+'</div>':'<p class="muted small">За 14 дней записей нет.</p>';
+    if(kd==='sleep') h4+=(sl.fallback?sheetRow('Эта неделя','ночей пока нет','muted'):'')+sheetRow(sl.fallback?'Среднее за прошлую неделю':'Среднее за неделю',sl.avg!=null?hm(sl.avg):'—',sl.avg!=null&&sl.avg>=sg?'good':'warn')+(sl.prev!=null?sheetRow('Прошлая неделя',hm(sl.prev)):'')+'<div class="sh-row"><span>Ночей меньше 6 ч '+tipBtn('Ночь меньше 6 часов — вместо зала прогулка.','Короткий сон')+'</span><b>'+days.filter(function(x){return x[1]!=null&&x[1]<6&&x[0]>=monday(today);}).length+'</b></div>';
     else h4+=sheetRow('Среднее за неделю',st!=null?thousands(Math.round(st/100)*100):'—',st!=null&&st>=stg?'good':'warn')+sheetRow('Цель',thousands(stg));
     return h4+'<button type="button" class="sh-link" data-act="metric-open" data-metric="'+kd+'"><span>'+(kd==='sleep'?'Сон по дням':'Шаги по дням')+'<small>все записи и график за любой период</small></span>'+uiIcon('right')+'</button>';
   }
@@ -1511,7 +1519,7 @@ function renderHealth(){
 /* ---------- render: settings ---------- */
 function renderSettings(){
   var c=Store.cfg,n=pendingCount();
-  var h='<div class="ses-head"><h2>Настройки</h2><span>Стекло · версия 20</span></div>';
+  var h='<div class="ses-head"><h2>Настройки</h2><span>Стекло · версия 21</span></div>';
   h+='<div class="panel"><h3>Apple Health</h3><p class="small muted mt8">Импорт сна и шагов из «Здоровья» через команду на iPhone. Ручные значения сохраняют приоритет.</p><div class="row mt8"><button class="btn" type="button" data-act="health-open">Импортировать сон и шаги</button><a class="text-button" href="health-setup.html" target="_blank" rel="noopener noreferrer">Инструкция</a></div></div>';
   h+='<div class="panel"><h3>Копия данных</h3><p class="small muted mt8">Все записи, включая ожидающие синхронизации. Токен доступа в файл не включается.</p><div class="row mt8"><button type="button" class="btn" data-act="download-backup">Скачать копию данных</button><button type="button" class="btn-ghost" data-act="download-upgrade-backup">Копия до обновления</button></div><p class="small muted mt8" id="backup-msg">'+esc(backupError)+'</p></div>';
   if(Store.state==='error'&&Store.err) h+='<div class="banner">'+esc(Store.err)+'</div>';
@@ -1614,6 +1622,13 @@ tabsEl.addEventListener('click',function(e){
 });
 gearEl.addEventListener('click',function(){ if(S.tab==='settings') navigate(S.returnTab); else {S.returnTab=S.tab; navigate('settings');} });
 view.addEventListener('click',function(e){
+  // Sleep and steps bars: the tapped column picks a day (bar layout: 38 px axis on the left, 6 px on the right).
+  var bars=e.target.closest&&e.target.closest('[data-bars]');
+  if(bars&&S.tab==='stats'){
+    var bs=bars.querySelector('svg'),bb=bs.getBoundingClientRect(),bw=bs.viewBox.baseVal.width,bx=(e.clientX-bb.left)*bw/bb.width,ds=bars.dataset.bars.split(','),bi=Math.floor((bx-38)/((bw-44)/ds.length));
+    if(bi>=0&&bi<ds.length){ var shb=view.querySelector('.sh'),tb=shb?shb.scrollTop:0; S.recSel=S.recSel===ds[bi]?null:ds[bi]; render(); shb=view.querySelector('.sh'); if(shb) shb.scrollTop=tb; }
+    return;
+  }
   var wc=e.target.closest&&e.target.closest('svg[data-chart="weight"]');
   if(wc&&S.tab==='stats'){
     var wb=wc.getBoundingClientRect(),vw=wc.viewBox.baseVal.width,px=(e.clientX-wb.left)*vw/wb.width,a=+wc.dataset.x0,z=+wc.dataset.x1,l=+wc.dataset.l,r=+wc.dataset.r;
@@ -1809,20 +1824,24 @@ document.addEventListener('keydown',function(e){
 });
 // Swipe an exercise card left to reveal ✕. Only a clearly horizontal move counts, so scrolling and typing are untouched.
 var exSw=null;
-function closeSwipes(except){ Array.prototype.forEach.call(view.querySelectorAll('.ex.swiped'),function(li){ if(li!==except){ li.classList.remove('swiped'); var inn=li.querySelector('.ex-in'); if(inn) inn.style.transform=''; } }); }
+// The whole card slides; ✕ sits behind it on the page background and shows only while the row is dragged or open.
+function closeSwipes(except){ Array.prototype.forEach.call(view.querySelectorAll('[data-swipe].swiped,[data-swipe].dragging'),function(li){ if(li!==except){ li.classList.remove('swiped','dragging'); var inn=li.querySelector('.ex-in'),del=li.querySelector('.ex-del'); if(inn) inn.style.transform=''; if(del) del.style.opacity=''; } }); }
 view.addEventListener('touchstart',function(e){
   var li=e.target.closest&&e.target.closest('li[data-swipe]'); if(!li||e.target.closest('input')){ exSw=null; return; }
   exSw={li:li,x:e.touches[0].clientX,y:e.touches[0].clientY,dx:0,on:false,open:li.classList.contains('swiped')};
 },{passive:true});
 view.addEventListener('touchmove',function(e){
   if(!exSw) return; var dx=e.touches[0].clientX-exSw.x,dy=e.touches[0].clientY-exSw.y;
-  if(!exSw.on){ if(Math.abs(dx)<10) return; if(Math.abs(dy)>Math.abs(dx)){ exSw=null; return; } exSw.on=true; closeSwipes(exSw.li); }
-  exSw.dx=dx; var shift=Math.max(-88,Math.min(0,(exSw.open?-72:0)+dx)),inn=exSw.li.querySelector('.ex-in'); if(inn) inn.style.transform='translateX('+shift+'px)';
+  if(!exSw.on){ if(Math.abs(dx)<10) return; if(Math.abs(dy)>Math.abs(dx)){ exSw=null; return; } exSw.on=true; closeSwipes(exSw.li); exSw.li.classList.add('dragging'); }
+  exSw.dx=dx; var shift=Math.max(-96,Math.min(0,(exSw.open?-80:0)+dx)),inn=exSw.li.querySelector('.ex-in'),del=exSw.li.querySelector('.ex-del'); if(inn) inn.style.transform='translateX('+shift+'px)';
+  // ✕ fades in only as far as the card has uncovered it, so it never shows through the glass.
+  if(del) del.style.opacity=String(Math.max(0,Math.min(1,(-shift-12)/56)));
 },{passive:true});
 view.addEventListener('touchend',function(){
   if(!exSw) return; var s=exSw; exSw=null; if(!s.on) return;
-  var open=(s.open?-72:0)+s.dx<-40,inn=s.li.querySelector('.ex-in');
-  s.li.classList.toggle('swiped',open); if(inn) inn.style.transform=open?'translateX(-72px)':'';
+  var open=(s.open?-80:0)+s.dx<-40,inn=s.li.querySelector('.ex-in');
+  var del=s.li.querySelector('.ex-del'); if(del) del.style.opacity='';
+  s.li.classList.remove('dragging'); s.li.classList.toggle('swiped',open); if(inn) inn.style.transform=open?'translateX(-80px)':'';
 });
 view.addEventListener('click',function(e){ if(!(e.target.closest&&e.target.closest('.ex-del'))) closeSwipes(); },true);
 var swipeY=null;

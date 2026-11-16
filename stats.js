@@ -285,7 +285,8 @@
     data.forEach(function(p,i){
       var cx=L+(i+0.5)*(W-L-R)/n;
       if(num(p[1])) g+='<rect class="st-bar'+(o.goal&&p[1]<o.goal?' low':'')+'" x="'+(cx-bw/2).toFixed(1)+'" y="'+y(p[1]).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(0,y(0)-y(p[1])).toFixed(1)+'" rx="3"><title>'+short(p[0])+': '+esc(o.valueLabel?o.valueLabel(p[1]):p[1])+'</title></rect>';
-      if(i%every===0||i===n-1) g+='<text class="st-lbl" x="'+cx.toFixed(1)+'" y="'+(H-6)+'" text-anchor="middle">'+short(p[0])+'</text>';
+      // The last date is always labelled; a regular label too close to it is skipped so they never overlap.
+      if((i%every===0&&n-1-i>=2)||i===n-1) g+='<text class="st-lbl" x="'+cx.toFixed(1)+'" y="'+(H-6)+'" text-anchor="middle">'+short(p[0])+'</text>';
     });
     if(o.goal) g+='<line class="st-goal" x1="'+L+'" x2="'+(W-R)+'" y1="'+y(o.goal).toFixed(1)+'" y2="'+y(o.goal).toFixed(1)+'"/>';
     return '<svg class="st-chart" width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(o.label)+'">'+g+'</svg>';

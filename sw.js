@@ -1,6 +1,6 @@
 // Offline shell for the journal. GitHub API calls are never cached.
-var CACHE='sport-journal-v20';
-var SHELL=['./','index.html','app.css?v=20','progress.css?v=20','health.js?v=20','progress.js?v=20','progress-view.js?v=20','stats.js?v=20','muscles.js?v=20','reviews.js?v=20','reviews.css?v=20','glass.css?v=20','app.js?v=20','health-setup.html','health-setup.css?v=8','manifest.webmanifest','icons/icon-180.png','icons/icon-192.png','icons/icon-512.png'];
+var CACHE='sport-journal-v21';
+var SHELL=['./','index.html','app.css?v=21','progress.css?v=21','health.js?v=21','progress.js?v=21','progress-view.js?v=21','stats.js?v=21','muscles.js?v=21','reviews.js?v=21','reviews.css?v=21','glass.css?v=21','app.js?v=21','health-setup.html','health-setup.css?v=8','manifest.webmanifest','icons/icon-180.png','icons/icon-192.png','icons/icon-512.png'];
 
 self.addEventListener('install',function(e){
   e.waitUntil(caches.open(CACHE).then(function(c){ return c.addAll(SHELL); }).then(function(){ return self.skipWaiting(); }));
