@@ -248,7 +248,8 @@ function allExercises(){ var p=P(),out=[]; if(!p) return out; sessionKeys().forE
 function effEx(slot,choice){
   if(!choice||choice===slot.id) return slot;
   var a=(slot.alts||[]).filter(function(x){ return x.id===choice; })[0];
-  if(!a) return slot;
+  // An exercise from another program keeps its own sets, reps and units; it fills the slot for that day only.
+  if(!a){ var x=findEx(choice); if(!x||x.id!==choice) return slot; var c=Object.assign({},x); c.slot=slot.id; c.slotName=slot.name; c.isAlt=true; c.cross=true; c.alts=slot.alts; return c; }
   var e=Object.assign({},slot,{inc:0,incText:'',unit:undefined,noWeight:false,bw:false,perSide:false,cue:'',start:null,repsUnit:undefined},a);
   e.slot=slot.id; e.slotName=slot.name; e.isAlt=true; e.alts=slot.alts;
   return e;
@@ -269,7 +270,8 @@ function slotChoice(slot,d){
   var wo=S.workouts[d];
   if(wo&&wo.swaps&&wo.swaps[slot.id]) return wo.swaps[slot.id];
   var ds=sortedDates(true);
-  for(var i=0;i<ds.length;i++){ var dd=ds[i]; if(dd>=d) continue; var w=S.workouts[dd]; if(w&&w.swaps&&w.swaps[slot.id]) return w.swaps[slot.id]; }
+  // Only the slot's own steps are remembered; a swap from another program stays on its day.
+  for(var i=0;i<ds.length;i++){ var dd=ds[i]; if(dd>=d) continue; var w=S.workouts[dd],c=w&&w.swaps&&w.swaps[slot.id]; if(c&&(c===slot.id||(slot.alts||[]).some(function(x){ return x.id===c; }))) return c; }
   return slot.id;
 }
 function repsWord(ex){ return ex.repsUnit==='с'?'секунд':'повторов'; }
@@ -473,6 +475,7 @@ function renderSheets(){
   var h='',open=false;
   if(S.calendarMonth){ h+=sheetWrap(renderCalendarBody(),'calendar-close'); open=true; }
   else if(S.swapOpen&&S.tab==='today'){ var sw=swapSheet(S.swapOpen); if(sw){ h+=sheetWrap(sw,'swap-close'); open=true; } }
+  else if(S.addEx&&S.tab==='today'){ h+=sheetWrap(addExSheet(),'extra-ex-close'); open=true; }
   else if(S.sheet&&S.tab==='stats'){ var sb=statSheet(S.sheet); if(sb){ h+=sheetWrap(sb,'sheet-close'); open=true; } }
   if(S.tip) h+=sheetWrap('<h2>'+esc(S.tip.title||'Пояснение')+'</h2><p class="sh-text">'+esc(S.tip.text)+'</p>','tip-close','sh-tip',!!S.tipAnim);
   document.body.classList.toggle('sheet-open',open||!!S.tip);
@@ -485,7 +488,7 @@ function uiIcon(name){
   var paths={left:'<path d="m14 6-6 6 6 6"/>',right:'<path d="m10 6 6 6-6 6"/>',calendar:'<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16"/>',back:'<path d="m10 5-7 7 7 7M3 12h18"/>',progress:'<path d="M4 4v16h16M8 15l4-5 4 2 4-6"/>'};
   return '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+(paths[name]||'')+'</svg>';
 }
-function navigate(tab,date){ persist(); S.finishOpen=false; S.sheet=null; S.tip=null; if(tab==='stats'&&S.tab!=='stats'){S.statsAnim=true;S.statsSel=null;} S.tab=tab; if(date) S.date=date; S.calendarMonth=null; S.swapOpen=null; render(); window.scrollTo(0,0); }
+function navigate(tab,date){ persist(); S.finishOpen=false; S.sheet=null; S.tip=null; S.addEx=false; if(tab==='stats'&&S.tab!=='stats'){S.statsAnim=true;S.statsSel=null;} S.tab=tab; if(date) S.date=date; S.calendarMonth=null; S.swapOpen=null; render(); window.scrollTo(0,0); }
 function overviewLink(tab,label){ return '<button class="overview-link" type="button" data-act="navigate" data-tab="'+tab+'"'+(tab==='body'?' data-date="'+todayStr()+'"':'')+'>'+esc(label)+'<span>Открыть</span></button>'; }
 function recordedWorkout(w){ return Object.keys(w.sets||{}).some(function(id){ return filled(w.sets[id]).length; })||!!(w.run&&(w.run.min>0||w.run.km>0)); }
 // Today screen: one date for the whole page, the plan, morning numbers, then what else is left to log.
@@ -695,55 +698,101 @@ function weightNote(ex,bar,t){
 }
 function targetTxt(ex,t){ if(!t) return ''; if(t.next) return 'следующая плитка × '+t.r; if(ex.noWeight||t.w==null) return t.r+' '+(ex.repsUnit||'повт.'); return (ex.bw?'+':'')+fmtN(t.w)+' '+(ex.unit||'кг')+' × '+t.r; }
 function restSeconds(text){ var m=String(text||'').match(/(\d+)/); if(!m) return 90; var n=+m[1]; return /мин/.test(text)?n*60:n; }
+// Exercises logged today outside the session's slots: added from the picker, or kept after a swap.
+function extraIds(type,d,wo){
+  var ses=P().sessions[type],own={}; if(!ses||!wo||!wo.sets) return [];
+  ses.items.forEach(function(slot){ own[effEx(slot,slotChoice(slot,d)).id]=1; });
+  return Object.keys(wo.sets).filter(function(id){ return !own[id]&&findEx(id); });
+}
 function sessionCount(type,d,w,wo){
   var ses=P().sessions[type],done=0,total=0; if(!ses) return {done:0,total:0};
   ses.items.forEach(function(slot){ var ex=effEx(slot,slotChoice(slot,d)),n=Math.max(plannedSets(slot,w),((wo&&wo.sets&&wo.sets[ex.id])||[]).length); total+=n; done+=filled(wo&&wo.sets&&wo.sets[ex.id]).length; });
+  extraIds(type,d,wo).forEach(function(id){ var rows=wo.sets[id]||[],f=filled(rows).length; total+=Math.max(rows.length,f,1); done+=f; });
   return {done:Math.min(done,total),total:total};
+}
+// One exercise block. `slot` is the program slot, or null for an exercise added only for today.
+function exItem(slot,ex,i,d,w,wo,ses){
+  var sid=slot?slot.id:'',planned=slot?plannedSets(slot,w):plannedSets(ex,w),rows=(wo&&wo.sets&&wo.sets[ex.id])||[],n=Math.max(slot?planned:1,rows.length);
+  var last=lastSession(ex.id,d),hn=hintFor(ex,d,last),ss=slot?supersetNote(ses.items,i):'',t0=targetFor(ex,d,0,last),doneN=filled(rows).length;
+  var bar=barFor(ex),wn=weightNote(ex,bar,t0),two=!ex.noWeight;
+  // How-to and the weight rule live under ⓘ; the screen keeps the name, the plan and the sets.
+  var why=!slot?'Добавлено только в эту тренировку.':ex.cross?'Замена из другой программы вместо «'+slot.name+'», только на сегодня.':ex.isAlt?'Замена вместо «'+slot.name+'». Выбор запомнится, у каждого упражнения своя история.':'';
+  var tip=[ex.cue,wn,why].filter(Boolean).join(' ');
+  var h='<li class="ex glass'+(doneN>=planned?' ex-done':'')+'"><div class="ex-top"><span class="ex-n">'+(slot?i+1:'+')+'</span><div class="ex-name"><h3>'+esc(ex.name)+'</h3>'+tipBtn(tip,ex.name)+'</div></div>'+
+    '<p class="target">'+planned+' × '+esc(dash(ex.reps))+(ex.repsUnit?' '+esc(ex.repsUnit):'')+(ex.perSide?' на сторону':'')+' · отдых '+esc(ex.rest)+(ss?' · '+esc(ss.toLowerCase()):'')+(ex.cross?' · из другой программы':'')+'</p>';
+  if(hn.cls==='up') h+='<p class="up-badge">↑ '+esc(hn.advice.replace(/^Пора (усложнить|прибавить): /,''))+'</p>';
+  else if(!last&&!t0&&hn.advice&&ex.start) h+='<p class="target">'+esc(hn.advice)+'</p>';
+  if(bar&&rows.some(function(r){ return r&&r.w!=null&&r.w>0&&r.w<bar.kg; })) h+='<p class="plates warn-text">Вес меньше грифа: штанга пишется вместе с грифом</p>';
+  // Column headers make the numbers readable: previous result, then today's weight and reps or seconds.
+  var wUnit=ex.bw?'+кг':/гантел/.test(ex.unit||'')?'кг ×1':'кг',rUnit=ex.repsUnit==='с'?'с':'повт.';
+  h+='<div class="sets"><div class="set g head'+(two?'':' nw')+'" aria-hidden="true"><span>#</span><span>'+(last?esc(fmtShort(last.date)):'прошлый')+'</span>'+(two?'<span>'+wUnit+'</span>':'')+'<span>'+rUnit+'</span><span></span></div>';
+  for(var k=0;k<n;k++){
+    var r=rows[k]||{},tg=targetFor(ex,d,k,last)||{},done=r.r!=null&&r.r>0,pr=last&&last.rows[k];
+    var prev=!pr?'—':ex.noWeight?String(pr.r):(pr.w!=null&&pr.w!==0?(ex.bw?'+':'')+fmtN(pr.w)+' × ':'')+pr.r;
+    h+='<div class="set g'+(two?'':' nw')+(done?' done':'')+'"><span class="set-n">'+(k+1)+'</span><span class="set-prev">'+esc(prev)+'</span>';
+    if(two) h+='<input class="cell" id="w-'+ex.id+'-'+k+'" data-ex="'+ex.id+'" data-slot="'+sid+'" data-i="'+k+'" data-f="w" inputmode="decimal" autocomplete="off" aria-label="'+esc(ex.name)+', подход '+(k+1)+', вес" value="'+esc(fmtN(r.w))+'" placeholder="'+esc(tg.w!=null?fmtN(tg.w):(ex.bw?'0':''))+'">';
+    h+='<input class="cell" id="r-'+ex.id+'-'+k+'" data-ex="'+ex.id+'" data-slot="'+sid+'" data-i="'+k+'" data-f="r" inputmode="numeric" autocomplete="off" aria-label="'+esc(ex.name)+', подход '+(k+1)+', '+(ex.repsUnit==='с'?'секунды':'повторы')+'" value="'+esc(r.r==null?'':r.r)+'" placeholder="'+esc(tg.r!=null?tg.r:'')+'">'+
+       '<button class="set-ok" type="button" data-act="set-ok" data-ex="'+ex.id+'" data-slot="'+sid+'" data-i="'+k+'" data-rest="'+restSeconds(ex.rest)+'" aria-pressed="'+done+'" aria-label="'+esc(ex.name)+', подход '+(k+1)+': сделал'+(tg.r!=null?' '+esc(targetTxt(ex,tg)):'')+'"><i><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 12.5 4 4 8-9"/></svg></i></button></div>';
+  }
+  h+='</div><div class="ex-foot"><button class="text-button" type="button" data-act="addset" data-ex="'+ex.id+'" data-slot="'+sid+'" data-n="'+n+'">+ подход</button>'+
+    (slot?'<button class="text-button" type="button" data-act="swap-open" data-slot="'+slot.id+'">Заменить</button>':'')+
+    (!slot&&!doneN?'<button class="text-button muted-btn" type="button" data-act="extra-ex-del" data-ex="'+ex.id+'">Убрать</button>':'')+'</div>';
+  return h+'</li>';
 }
 function sessionBlock(type,d,w,wo){
   var ses=P().sessions[type]; if(!ses) return '';
   var cnt=sessionCount(type,d,w,wo);
   var h='<div class="ses-head"><h2>'+esc(ses.title)+'</h2>'+(ses.sub?'<span>'+esc(ses.sub)+'</span>':'')+'</div>'+
     '<div class="wk-progress"><span id="wk-count">'+cnt.done+' из '+cnt.total+' подходов</span><progress id="wk-bar" max="'+cnt.total+'" value="'+cnt.done+'"></progress></div><ol class="exlist">';
-  ses.items.forEach(function(slot,i){
-    var ex=effEx(slot,slotChoice(slot,d)),planned=plannedSets(slot,w),rows=(wo&&wo.sets&&wo.sets[ex.id])||[],n=Math.max(planned,rows.length);
-    var last=lastSession(ex.id,d),hn=hintFor(ex,d,last),ss=supersetNote(ses.items,i),t0=targetFor(ex,d,0,last),doneN=filled(rows).length;
-    var bar=barFor(ex),wn=weightNote(ex,bar,t0),two=!ex.noWeight;
-    // How-to and the weight rule live under ⓘ; the screen keeps the name, the plan and the sets.
-    var tip=[ex.cue,wn,ex.isAlt?'Замена вместо «'+slot.name+'». Выбор запомнится, у каждого упражнения своя история.':''].filter(Boolean).join(' ');
-    h+='<li class="ex glass'+(doneN>=planned?' ex-done':'')+'"><div class="ex-top"><span class="ex-n">'+(i+1)+'</span><div class="ex-name"><h3>'+esc(ex.name)+'</h3>'+tipBtn(tip,ex.name)+'</div></div>'+
-      '<p class="target">'+planned+' × '+esc(dash(ex.reps))+(ex.repsUnit?' '+esc(ex.repsUnit):'')+(ex.perSide?' на сторону':'')+' · отдых '+esc(ex.rest)+(ss?' · '+esc(ss.toLowerCase()):'')+'</p>';
-    if(hn.cls==='up') h+='<p class="up-badge">↑ '+esc(hn.advice.replace(/^Пора (усложнить|прибавить): /,''))+'</p>';
-    else if(!last&&!t0&&hn.advice&&ex.start) h+='<p class="target">'+esc(hn.advice)+'</p>';
-    if(bar&&rows.some(function(r){ return r&&r.w!=null&&r.w>0&&r.w<bar.kg; })) h+='<p class="plates warn-text">Вес меньше грифа: штанга пишется вместе с грифом</p>';
-    // Column headers make the numbers readable: previous result, then today's weight and reps or seconds.
-    var wUnit=ex.bw?'+кг':/гантел/.test(ex.unit||'')?'кг ×1':'кг',rUnit=ex.repsUnit==='с'?'с':'повт.';
-    h+='<div class="sets"><div class="set g head'+(two?'':' nw')+'" aria-hidden="true"><span>#</span><span>'+(last?esc(fmtShort(last.date)):'прошлый')+'</span>'+(two?'<span>'+wUnit+'</span>':'')+'<span>'+rUnit+'</span><span></span></div>';
-    for(var k=0;k<n;k++){
-      var r=rows[k]||{},tg=targetFor(ex,d,k,last)||{},done=r.r!=null&&r.r>0,pr=last&&last.rows[k];
-      var prev=!pr?'—':ex.noWeight?String(pr.r):(pr.w!=null&&pr.w!==0?(ex.bw?'+':'')+fmtN(pr.w)+' × ':'')+pr.r;
-      h+='<div class="set g'+(two?'':' nw')+(done?' done':'')+'"><span class="set-n">'+(k+1)+'</span><span class="set-prev">'+esc(prev)+'</span>';
-      if(two) h+='<input class="cell" id="w-'+ex.id+'-'+k+'" data-ex="'+ex.id+'" data-slot="'+slot.id+'" data-i="'+k+'" data-f="w" inputmode="decimal" autocomplete="off" aria-label="'+esc(ex.name)+', подход '+(k+1)+', вес" value="'+esc(fmtN(r.w))+'" placeholder="'+esc(tg.w!=null?fmtN(tg.w):(ex.bw?'0':''))+'">';
-      h+='<input class="cell" id="r-'+ex.id+'-'+k+'" data-ex="'+ex.id+'" data-slot="'+slot.id+'" data-i="'+k+'" data-f="r" inputmode="numeric" autocomplete="off" aria-label="'+esc(ex.name)+', подход '+(k+1)+', '+(ex.repsUnit==='с'?'секунды':'повторы')+'" value="'+esc(r.r==null?'':r.r)+'" placeholder="'+esc(tg.r!=null?tg.r:'')+'">'+
-         '<button class="set-ok" type="button" data-act="set-ok" data-ex="'+ex.id+'" data-slot="'+slot.id+'" data-i="'+k+'" data-rest="'+restSeconds(ex.rest)+'" aria-pressed="'+done+'" aria-label="'+esc(ex.name)+', подход '+(k+1)+': сделал'+(tg.r!=null?' '+esc(targetTxt(ex,tg)):'')+'"><i><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 12.5 4 4 8-9"/></svg></i></button></div>';
-    }
-    h+='</div><div class="ex-foot"><button class="text-button" type="button" data-act="addset" data-ex="'+ex.id+'" data-slot="'+slot.id+'" data-n="'+n+'">+ подход</button>'+
-      ((slot.alts&&slot.alts.length)?'<button class="text-button" type="button" data-act="swap-open" data-slot="'+slot.id+'">Заменить</button>':'')+'</div>';
-    h+='</li>';
-  });
-  h+='</ol>';
+  ses.items.forEach(function(slot,i){ h+=exItem(slot,effEx(slot,slotChoice(slot,d)),i,d,w,wo,ses); });
+  extraIds(type,d,wo).forEach(function(id){ h+=exItem(null,findEx(id),0,d,w,wo,ses); });
+  h+='</ol><button class="btn-ghost add-ex" type="button" data-act="extra-ex-open">+ Упражнение</button>';
   if(ses.after) h+='<p class="after-line">После тренировки '+tipBtn(ses.after,'После тренировки')+'</p>';
   h+='<button class="btn" type="button" data-act="finish">'+(S.finishOpen?'Скрыть итог':'Закончить тренировку')+'</button>';
   if(S.finishOpen) h+=finishSummary(type,d,w,wo);
   return h;
 }
-// Swap in a bottom sheet: the slot's exercise and its alternatives; the choice is remembered for next time.
+// Every exercise of every program with its alternatives, grouped by the main muscle group, for swaps and additions.
+var GROUP_ORDER=['Кор','Спина','Грудь','Плечи','Руки','Ноги','Другое'];
+function exGroup(ex){
+  var m=SportMuscles.info(ex.id,ex.name).muscles,key=Object.keys(m).filter(function(k){ return m[k]>=1; })[0]||Object.keys(m)[0],g='Другое';
+  SportMuscles.MUSCLES.forEach(function(x){ if(x.key===key) g=x.group; });
+  return g;
+}
+function exCatalog(){
+  var out=[],seen={};
+  programs().forEach(function(pg){ pg.sessions.forEach(function(k){ var s=P().sessions[k]; if(!s) return; s.items.forEach(function(slot){
+    [slot].concat(slot.alts||[]).forEach(function(c){ if(seen[c.id]) return; seen[c.id]=1; var ex=c===slot?slot:effEx(slot,c.id); out.push({ex:ex,prog:pg.key,progTitle:pg.title,group:exGroup(ex)}); });
+  }); }); });
+  return out;
+}
+function slotFor(slotId){
+  // The same slot id can exist in both programs (pull-ups, lunges): prefer the session open today.
+  var ses=P().sessions[typeOf(S.date)],hit=null;
+  if(ses) ses.items.forEach(function(x){ if(x.id===slotId) hit=x; });
+  if(!hit) allExercises().forEach(function(a){ if(!hit&&a.ex.id===slotId) hit=a.ex; });
+  return hit;
+}
+function catalogRow(c,act,extra,cur){
+  return '<button class="sh-row" type="button" data-act="'+act+'"'+extra+' data-choice="'+c.ex.id+'" data-ex="'+c.ex.id+'"'+(cur!=null?' aria-pressed="'+(c.ex.id===cur)+'"':'')+'><span>'+esc(c.ex.name)+'<small>'+esc(dash(c.ex.reps))+(c.ex.repsUnit?' '+esc(c.ex.repsUnit):'')+(c.progTitle?' · '+esc(c.progTitle.toLowerCase()):'')+'</small></span><b>'+(c.ex.id===cur?'✓':'')+'</b></button>';
+}
+// Swap in a bottom sheet: the slot's own steps first (remembered), then the same muscle group from the other program (today only).
 function swapSheet(slotId){
-  var slot=null; allExercises().forEach(function(a){ if(!slot&&a.ex.id===slotId) slot=a.ex; }); if(!slot||!slot.alts) return '';
-  var cur=effEx(slot,slotChoice(slot,S.date)).id;
-  return '<h2>Заменить: '+esc(slot.name)+'</h2>'+[slot].concat(slot.alts).map(function(c){
+  var slot=slotFor(slotId); if(!slot) return '';
+  var cur=effEx(slot,slotChoice(slot,S.date)).id,pg=progOf(typeOf(S.date)),grp=exGroup(slot),own={};
+  [slot].concat(slot.alts||[]).forEach(function(c){ own[c.id]=1; });
+  var h='<h2>Заменить: '+esc(slot.name)+'</h2>'+[slot].concat(slot.alts||[]).map(function(c){
     return '<button class="sh-row" type="button" data-act="swap" data-slot="'+slot.id+'" data-choice="'+c.id+'" aria-pressed="'+(c.id===cur)+'"><span>'+esc(c.name)+'<small>'+esc(dash(c.reps||slot.reps))+(c.repsUnit||(!c.reps&&slot.repsUnit)?' '+esc(c.repsUnit||slot.repsUnit):'')+(c.id===slot.id?' · основное':'')+'</small></span><b>'+(c.id===cur?'✓':'')+'</b></button>';
   }).join('')+'<p class="sh-note">Выбор запомнится, у каждого упражнения своя история.</p>';
+  var other=exCatalog().filter(function(c){ return !own[c.ex.id]&&c.group===grp&&(!pg||c.prog!==pg.key); });
+  if(other.length) h+='<h3>'+esc(grp)+' из другой программы '+tipBtn('Такая замена — только на сегодня: в следующий раз здесь снова упражнение программы. История у каждого упражнения своя.','Из другой программы')+'</h3>'+other.map(function(c){ return catalogRow(c,'swap',' data-slot="'+slot.id+'"',cur); }).join('');
+  return h;
+}
+// Add any exercise of either program to today's workout, grouped by muscle group, core first.
+function addExSheet(){
+  var wo=S.workouts[S.date],have=(wo&&wo.sets)||{},cat=exCatalog().filter(function(c){ return !have[c.ex.id]; }),h='<h2>Добавить упражнение</h2>';
+  GROUP_ORDER.forEach(function(g){ var list=cat.filter(function(c){ return c.group===g; }); if(list.length) h+='<h3>'+esc(g)+'</h3>'+list.map(function(c){ return catalogRow(c,'extra-ex-add','',null); }).join(''); });
+  return h+'<p class="sh-note">Добавится только в эту тренировку.</p>';
 }
 // Summary after the session: counts and new estimated maxima against all earlier sessions.
 function finishSummary(type,d,w,wo){
@@ -1450,7 +1499,7 @@ function renderHealth(){
 /* ---------- render: settings ---------- */
 function renderSettings(){
   var c=Store.cfg,n=pendingCount();
-  var h='<div class="ses-head"><h2>Настройки</h2><span>Стекло · версия 18</span></div>';
+  var h='<div class="ses-head"><h2>Настройки</h2><span>Стекло · версия 19</span></div>';
   h+='<div class="panel"><h3>Apple Health</h3><p class="small muted mt8">Импорт сна и шагов из «Здоровья» через команду на iPhone. Ручные значения сохраняют приоритет.</p><div class="row mt8"><button class="btn" type="button" data-act="health-open">Импортировать сон и шаги</button><a class="text-button" href="health-setup.html" target="_blank" rel="noopener noreferrer">Инструкция</a></div></div>';
   h+='<div class="panel"><h3>Копия данных</h3><p class="small muted mt8">Все записи, включая ожидающие синхронизации. Токен доступа в файл не включается.</p><div class="row mt8"><button type="button" class="btn" data-act="download-backup">Скачать копию данных</button><button type="button" class="btn-ghost" data-act="download-upgrade-backup">Копия до обновления</button></div><p class="small muted mt8" id="backup-msg">'+esc(backupError)+'</p></div>';
   if(Store.state==='error'&&Store.err) h+='<div class="banner">'+esc(Store.err)+'</div>';
@@ -1573,6 +1622,11 @@ view.addEventListener('click',function(e){
   if(act==='sheet-open'){ S.sheet=b.dataset.sheet; S.sheetAnim=true; S.statsSel=null; render(); return; }
   if(act==='sheet-close'){ S.sheet=null; render(); return; }
   if(act==='swap-close'){ S.swapOpen=null; render(); return; }
+  if(act==='extra-ex-open'){ S.addEx=true; S.sheetAnim=true; render(); return; }
+  if(act==='extra-ex-close'){ S.addEx=false; render(); return; }
+  // An added exercise is just another key in the day's sets, so the file format stays the same.
+  if(act==='extra-ex-add'){ var xw=getW(S.date,true),xid=b.dataset.ex,xe=findEx(xid); if(!xe) return; if(!xw.sets[xid]) xw.sets[xid]=[]; while(xw.sets[xid].length<plannedSets(xe,weekOf(S.date))) xw.sets[xid].push({w:null,r:null}); touchPath('workouts/'+S.date+'.json'); S.addEx=false; render(); var xi=document.getElementById((xe.noWeight?'r-':'w-')+xid+'-0'); if(xi) xi.scrollIntoView({block:'center'}); return; }
+  if(act==='extra-ex-del'){ var dw=S.workouts[S.date],did=b.dataset.ex; if(dw&&dw.sets&&dw.sets[did]&&!filled(dw.sets[did]).length){ delete dw.sets[did]; touchPath('workouts/'+S.date+'.json'); render(); } return; }
   if(act==='navigate') navigate(b.dataset.tab,b.dataset.date);
   else if(act==='review-open'){if(!SportReviews.isPath(b.dataset.path))return;var anchor=b.dataset.anchor;S.reviewPath=b.dataset.path;navigate('reviews');var rt=anchor&&document.getElementById('review-heading-'+anchor);if(rt){rt.focus({preventScroll:true});rt.scrollIntoView();}else{rt=view.querySelector('.review-title');if(rt)rt.focus({preventScroll:true});}}
   else if(act==='review-list'){S.reviewPath=null;render();window.scrollTo(0,0);var rl=document.getElementById('reviews-title');if(rl)rl.focus({preventScroll:true});}
@@ -1731,13 +1785,13 @@ view.addEventListener('focusout',function(e){
 // Sheets close with Escape and with a swipe down on the sheet.
 document.addEventListener('keydown',function(e){
   if(e.key!=='Escape') return;
-  if(S.tip){ S.tip=null; render(); } else if(S.sheet){ S.sheet=null; render(); } else if(S.swapOpen){ S.swapOpen=null; render(); }
+  if(S.tip){ S.tip=null; render(); } else if(S.sheet){ S.sheet=null; render(); } else if(S.swapOpen){ S.swapOpen=null; render(); } else if(S.addEx){ S.addEx=false; render(); }
 });
 var swipeY=null;
 view.addEventListener('touchstart',function(e){ var sh=e.target.closest&&e.target.closest('.sh'); swipeY=sh&&sh.scrollTop<=0?e.touches[0].clientY:null; },{passive:true});
 view.addEventListener('touchend',function(e){
   if(swipeY==null) return; var dy=e.changedTouches[0].clientY-swipeY; swipeY=null; if(dy<70) return;
-  if(S.tip) S.tip=null; else if(S.calendarMonth) S.calendarMonth=null; else if(S.sheet) S.sheet=null; else if(S.swapOpen) S.swapOpen=null; else return;
+  if(S.tip) S.tip=null; else if(S.calendarMonth) S.calendarMonth=null; else if(S.sheet) S.sheet=null; else if(S.swapOpen) S.swapOpen=null; else if(S.addEx) S.addEx=false; else return;
   render();
 });
 view.addEventListener('keydown',function(e){

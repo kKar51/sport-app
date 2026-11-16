@@ -131,6 +131,8 @@ body.sheet-open{overflow:hidden}
 .set-ok[aria-pressed="true"] i{background:var(--good);border-color:var(--good);color:var(--on-accent);opacity:1}
 .ex-foot{display:flex;justify-content:flex-start!important;gap:24px!important;margin:4px 0 0 24px}
 .ex-foot .text-button{min-height:44px;padding:0;font-size:14px}
+.add-ex{width:100%;min-height:48px;border:1px dashed var(--glass-line)!important;border-radius:16px!important;background:none!important;color:var(--accent);font-size:16px;margin-top:4px}
+.muted-btn{color:var(--muted)!important}
 .after-line{font-size:14px;color:var(--muted);display:flex;align-items:center;gap:6px}
 .banner{border-radius:16px}
 
